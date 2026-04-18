@@ -1,0 +1,12 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Only the owner's Google UID can read or write any data.
+    // Replace REPLACE_WITH_YOUR_UID with your actual UID after first sign-in,
+    // then run: firebase deploy --only firestore:rules
+    match /{document=**} {
+      allow read, write: if request.auth != null
+                         && request.auth.uid == 'Omlcn6s8XeSMeeYfbceAISWwtrA2';
+    }
+  }
+}

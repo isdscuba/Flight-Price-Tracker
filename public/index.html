@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Flight Tracker</title>
+
+  <!-- iOS PWA -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Flight Tracker">
+  <meta name="theme-color" content="#0F172A">
+
+  <!-- Inter font -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-functions-compat.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+  <!-- ════════════════════════════════════════════
+       LOGIN SCREEN
+  ════════════════════════════════════════════ -->
+  <div id="loginScreen" class="login-screen">
+    <div class="login-card">
+      <div class="login-logo">
+        <!-- Plane SVG logo -->
+        <svg width="44" height="44" viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect width="44" height="44" rx="12" fill="#3B82F6"/>
+          <path d="M8 22L22 10L36 22" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M14 28L22 14L30 28" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.5"/>
+          <path d="M10 31h24" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+        </svg>
+        <span class="login-app-name">Flight Tracker</span>
+      </div>
+      <h1 class="login-headline">Know when prices drop</h1>
+      <p class="login-sub">Track routes and get alerted when prices fall below your threshold.</p>
+      <div id="loginError" style="display:none; margin-bottom:16px; padding:12px 16px; background:#FFE4E6; border-radius:10px; color:#BE123C; font-size:0.875rem; font-weight:500;">
+        ⛔ Access restricted to authorised account only.
+      </div>
+      <button id="googleSignInBtn" class="btn-google">
+        <svg width="18" height="18" viewBox="0 0 20 20">
+          <path d="M19.6 10.23c0-.68-.06-1.36-.17-2H10v3.79h5.4a4.6 4.6 0 01-2 3.02v2.5h3.25c1.9-1.75 3-4.33 3-7.31z" fill="#4285F4"/>
+          <path d="M10 20c2.7 0 4.97-.9 6.62-2.43l-3.25-2.5c-.9.6-2.04.95-3.37.95-2.6 0-4.8-1.75-5.59-4.1H1.07v2.57A9.99 9.99 0 0010 20z" fill="#34A853"/>
+          <path d="M4.41 11.92A6.01 6.01 0 014.1 10c0-.67.12-1.32.31-1.92V5.51H1.07A9.99 9.99 0 000 10c0 1.61.38 3.13 1.07 4.49l3.34-2.57z" fill="#FBBC05"/>
+          <path d="M10 3.97c1.46 0 2.77.5 3.8 1.49l2.85-2.85C14.96.9 12.7 0 10 0A9.99 9.99 0 001.07 5.51l3.34 2.57C5.2 5.72 7.4 3.97 10 3.97z" fill="#EA4335"/>
+        </svg>
+        Sign in with Google
+      </button>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════
+       APP SHELL — hidden until authenticated
+  ════════════════════════════════════════════ -->
+  <div id="app" class="app" style="display:none;">
+
+    <!-- TOP HEADER -->
+    <header class="app-header">
+      <div class="header-left">
+        <!-- Plane SVG logo -->
+        <svg width="30" height="30" viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect width="44" height="44" rx="12" fill="#3B82F6"/>
+          <path d="M8 22L22 10L36 22" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M14 28L22 14L30 28" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.5"/>
+          <path d="M10 31h24" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+        </svg>
+        <span class="app-name">Flight Tracker</span>
+      </div>
+      <div class="header-right">
+        <img id="userAvatar" class="user-avatar" src="" alt="" style="display:none;">
+        <button id="signOutBtn" class="btn-logout" title="Sign out">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/>
+            <polyline points="16 17 21 12 16 7"/>
+            <line x1="21" y1="12" x2="9" y2="12"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- MAIN CONTENT -->
+    <main class="app-main">
+      <div class="page">
+
+        <!-- Add flight form -->
+        <div class="section-card" id="addFlightSection">
+          <h2 class="section-title">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+            Track New Route
+          </h2>
+          <form id="addFlightForm">
+
+            <!-- Row 1: Origin / Destination / Departure / Return -->
+            <div class="form-row">
+              <div class="form-group">
+                <label for="origin">Origin Airport(s)</label>
+                <input
+                  type="text"
+                  id="origin"
+                  placeholder="JFK,ISP,LGA"
+                  value="JFK,ISP,LGA"
+                  required
+                  title="One or more IATA codes, comma-separated">
+                <small>Comma-separated for multi-airport</small>
+              </div>
+
+              <div class="form-group">
+                <label for="destination">Destination</label>
+                <input
+                  type="text"
+                  id="destination"
+                  placeholder="LAX"
+                  required
+                  pattern="[A-Za-z]{3}"
+                  maxlength="3"
+                  title="3-letter IATA code">
+              </div>
+
+              <div class="form-group">
+                <label for="departureDate">Departure</label>
+                <input type="date" id="departureDate" required>
+              </div>
+
+              <div class="form-group">
+                <label for="returnDate">Return</label>
+                <input type="date" id="returnDate">
+              </div>
+            </div>
+
+            <!-- Row 2: Passengers / Alert / Flight Type -->
+            <div class="form-row">
+              <div class="form-group">
+                <label for="adults">Adults</label>
+                <input type="number" id="adults" min="1" max="9" value="2" required>
+                <small>Age 12+</small>
+              </div>
+
+              <div class="form-group">
+                <label for="children">Children</label>
+                <input type="number" id="children" min="0" max="9" value="2">
+                <small>Age 2–11</small>
+              </div>
+
+              <div class="form-group">
+                <label for="alertPercentage">Alert Threshold</label>
+                <input type="number" id="alertPercentage" min="1" max="100" value="5" required>
+                <small>% drop triggers alert</small>
+              </div>
+
+              <div class="form-group">
+                <label for="flightType">Flight Type</label>
+                <select id="flightType">
+                  <option value="any">Any (inc. connections)</option>
+                  <option value="direct">Direct only</option>
+                </select>
+                <small>For cached price comparison</small>
+              </div>
+            </div>
+
+            <!-- Row 3: Time filters + max duration -->
+            <div class="form-row">
+              <div class="form-group">
+                <label for="departureTimeStart">Depart After</label>
+                <input type="time" id="departureTimeStart">
+                <small>Earliest departure (optional)</small>
+              </div>
+
+              <div class="form-group">
+                <label for="departureTimeEnd">Depart Before</label>
+                <input type="time" id="departureTimeEnd">
+                <small>Latest departure (optional)</small>
+              </div>
+
+              <div class="form-group">
+                <label for="maxDuration">Max Duration (hrs)</label>
+                <input type="number" id="maxDuration" min="1" max="48" step="0.5" placeholder="e.g. 14">
+                <small>Max total travel time (optional)</small>
+              </div>
+            </div>
+
+            <!-- Row 4: Stops preference -->
+            <div class="form-row">
+              <div class="form-group">
+                <label>Max Stops</label>
+                <div class="stops-options">
+                  <label class="stops-option">
+                    <input type="radio" name="stopsPreference" value="direct"> Nonstop only
+                  </label>
+                  <label class="stops-option">
+                    <input type="radio" name="stopsPreference" value="1stop"> 1 stop max
+                  </label>
+                  <label class="stops-option">
+                    <input type="radio" name="stopsPreference" value="any" checked> Any stops
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <button type="submit" class="btn-submit">
+              ✈ Begin Tracking
+            </button>
+          </form>
+        </div>
+
+        <!-- Active routes -->
+        <div class="section-card">
+          <h2 class="section-title">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+            Active Routes
+          </h2>
+          <div id="flightList" class="flight-list">
+            <div class="loading">Loading tracked flights…</div>
+          </div>
+        </div>
+
+      </div>
+    </main>
+
+    <!-- BOTTOM NAV (mobile) -->
+    <nav class="bottom-nav">
+      <button class="bottom-nav-btn" onclick="document.getElementById('addFlightSection').scrollIntoView({behavior:'smooth'})">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+        Add
+      </button>
+      <button class="bottom-nav-btn" onclick="document.getElementById('flightList').scrollIntoView({behavior:'smooth'})">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.8 19.2L16 11l3.5-3.5C21 6 21 4 19.5 2.5S18 2 16.5 3.5L13 7l-8.2-1.8C3.8 5 3 5.8 3 6.8l.8 1.4a1 1 0 00.8.5l4.4.8L6.8 12H5l-1 1 1.6 1.6 1.6 1.6L8 15l-1.6-1.6L8 12h2.3l-.8 4.4a1 1 0 00.5.8l1.4.8c1 0 1.8-.8 1.6-1.8z"/></svg>
+        Routes
+      </button>
+      <button class="bottom-nav-btn" onclick="auth.signOut()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        Sign out
+      </button>
+    </nav>
+
+  </div><!-- /#app -->
+
+  <!-- EDIT MODAL -->
+  <div id="editModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Edit Flight Settings</h3>
+        <button class="close-modal" onclick="closeEditModal()">&times;</button>
+      </div>
+      <form id="editFlightForm">
+        <input type="hidden" id="editFlightId">
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="editAlertPercentage">Alert Threshold (%)</label>
+            <input type="number" id="editAlertPercentage" min="1" max="100" required>
+          </div>
+          <div class="form-group">
+            <label for="editFlightType">Flight Type</label>
+            <select id="editFlightType">
+              <option value="any">Any (inc. connections)</option>
+              <option value="direct">Direct only</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="editDepartureTimeStart">Depart After</label>
+            <input type="time" id="editDepartureTimeStart">
+          </div>
+          <div class="form-group">
+            <label for="editDepartureTimeEnd">Depart Before</label>
+            <input type="time" id="editDepartureTimeEnd">
+          </div>
+          <div class="form-group">
+            <label for="editMaxDuration">Max Duration (hrs)</label>
+            <input type="number" id="editMaxDuration" min="1" max="48" step="0.5">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>Max Stops</label>
+          <div class="stops-options">
+            <label class="stops-option">
+              <input type="radio" name="editStopsPreference" value="direct"> Nonstop only
+            </label>
+            <label class="stops-option">
+              <input type="radio" name="editStopsPreference" value="1stop"> 1 stop max
+            </label>
+            <label class="stops-option">
+              <input type="radio" name="editStopsPreference" value="any"> Any stops
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group" style="margin-top:12px;">
+          <label style="flex-direction:row; align-items:center; gap:8px; text-transform:none; letter-spacing:0; font-size:0.875rem; font-weight:500;">
+            <input type="checkbox" id="editAlertEnabled" style="width:auto;">
+            Enable price alerts
+          </label>
+        </div>
+
+        <div class="modal-actions">
+          <button type="button" class="btn-secondary" onclick="closeEditModal()">Cancel</button>
+          <button type="submit" class="btn-primary">Save Changes</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
