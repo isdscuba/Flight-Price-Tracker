@@ -22,5 +22,8 @@ Thumbs.db
 *.swp
 *.swo
 
+# Claude Code local settings
+.claude/
+
 # Firebase config (if you want to keep it private)
 # public/config.js
