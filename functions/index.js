@@ -30,10 +30,12 @@ function extractMinPrice(data) {
 
 /**
  * Fetch prices from:
- *   1. Travelpayouts /v1/prices/cheap  → cheapPrice (best cached)
- *   2. Google Flights via Cloud Run    → googlePrice (real live prices)
+ *   1. Travelpayouts /v1/prices/cheap  → cheapPrice (cached)
+ *   2. Google Flights via Cloud Run    → googlePrice (fast_flights scraper)
+ *   3. fli Scanner via Cloud Run       → fliPrice (reverse-engineered Google Flights API)
  *
- * Returns { cheapPrice, googlePrice, googlePriceLevel, googleFlightsList, topFlight }
+ * Returns { cheapPrice, googlePrice, googlePriceLevel, googleFlightsList, topFlight,
+ *           fliPrice, fliTopFlight, fliFlightsList }
  * Any field may be null if no data.
  */
 async function fetchPrice(flight) {
@@ -50,40 +52,55 @@ async function fetchPrice(flight) {
 
   const headers = { 'X-Access-Token': token };
 
-  // Google Flights via Cloud Run — runs in parallel with cheap
+  const flightPayload = {
+    origin:             flight.origin,
+    destination:        flight.destination,
+    departureDate:      flight.departureDate,
+    returnDate:         flight.returnDate || null,
+    adults:             flight.adults || 1,
+    children:           flight.children || 0,
+    stopsPreference:    flight.stopsPreference || 'any',
+    departureTimeStart: flight.departureTimeStart || null,
+    departureTimeEnd:   flight.departureTimeEnd || null,
+    maxDurationHours:   flight.maxDurationHours || null
+  };
+
+  const cloudRunHeaders = {
+    'Content-Type': 'application/json',
+    'X-Price-Secret': googlePriceSecret.value()
+  };
+
+  // Google Flights via Cloud Run scraper (fast_flights)
   const googlePricePromise = (async () => {
     const url = googlePriceFetcherUrl.value();
     if (!url) return null;
     try {
-      const resp = await axios.post(`${url}/price`, {
-        origin:              flight.origin,         // string OR array for multi-airport
-        destination:         flight.destination,
-        departureDate:       flight.departureDate,
-        returnDate:          flight.returnDate || null,
-        adults:              flight.adults || 1,
-        children:            flight.children || 0,
-        stopsPreference:     flight.stopsPreference || 'any',
-        departureTimeStart:  flight.departureTimeStart || null,
-        departureTimeEnd:    flight.departureTimeEnd || null,
-        maxDurationHours:    flight.maxDurationHours || null
-      }, {
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Price-Secret': googlePriceSecret.value()
-        },
-        timeout: 20000
-      });
+      const resp = await axios.post(`${url}/price`, flightPayload, { headers: cloudRunHeaders, timeout: 20000 });
       return resp.data ?? null;
     } catch (e) {
-      console.warn(`[${flight.origin}-${flight.destination}] Cloud Run error: ${e.message}`);
+      console.warn(`[${flight.origin}-${flight.destination}] Google Cloud Run error: ${e.message}`);
       return null;
     }
   })();
 
-  // Run both in parallel
-  const [cheapRes, googleRes] = await Promise.allSettled([
+  // fli Scanner — 2nd Google Flights source (reverse-engineered API, same Cloud Run service)
+  const fliPricePromise = (async () => {
+    const url = googlePriceFetcherUrl.value();
+    if (!url) return null;
+    try {
+      const resp = await axios.post(`${url}/fli-price`, flightPayload, { headers: cloudRunHeaders, timeout: 20000 });
+      return resp.data ?? null;
+    } catch (e) {
+      console.warn(`[${flight.origin}-${flight.destination}] fli error: ${e.message}`);
+      return null;
+    }
+  })();
+
+  // Run all three in parallel
+  const [cheapRes, googleRes, fliRes] = await Promise.allSettled([
     axios.get('https://api.travelpayouts.com/v1/prices/cheap', { headers, params: baseParams }),
-    googlePricePromise
+    googlePricePromise,
+    fliPricePromise
   ]);
 
   // ── Extract cheap price ────────────────────────────────────────────────────
@@ -122,14 +139,28 @@ async function fetchPrice(flight) {
     topFlight = gData.topFlight || null;
   }
 
+  // ── Extract fli price ──────────────────────────────────────────────────────
+  let fliPrice = null;
+  let fliTopFlight = null;
+  let fliFlightsList = [];
+
+  if (fliRes.status === 'fulfilled' && fliRes.value !== null) {
+    const fData = fliRes.value;
+    if (typeof fData.fliPrice === 'number' && fData.fliPrice > 0) {
+      fliPrice = parseFloat(fData.fliPrice.toFixed(2));
+    }
+    fliFlightsList = Array.isArray(fData.flights) ? fData.flights : [];
+    fliTopFlight = fData.topFlight || null;
+  }
+
   console.log(
     `[${flight.origin}-${flight.destination}] ` +
     `google: ${googlePrice ?? 'n/a'} (${googlePriceLevel ?? '?'}), ` +
-    `cheap: ${cheapPrice ?? 'n/a'} USD (×${totalPassengers} pax), ` +
-    `${googleFlightsList.length} flights returned`
+    `fli: ${fliPrice ?? 'n/a'}, ` +
+    `cheap: ${cheapPrice ?? 'n/a'} USD (×${totalPassengers} pax)`
   );
 
-  return { cheapPrice, googlePrice, googlePriceLevel, googleFlightsList, topFlight };
+  return { cheapPrice, googlePrice, googlePriceLevel, googleFlightsList, topFlight, fliPrice, fliTopFlight, fliFlightsList };
 }
 
 /**
@@ -158,16 +189,21 @@ async function computePriceTrend(flightId) {
 }
 
 /**
- * Send Telegram notification with price alert details + top flight info
+ * Send Telegram notification with price alert details + top flight info.
+ * prices: { cheapPrice, googlePrice, googlePriceLevel, fliPrice,
+ *           primaryPrice, primaryPriceSource, bestPrice, bestPriceSource, isNewBestPrice }
  */
 async function sendTelegramNotification(flight, prices, trendScore, triggerType, topFlight = null) {
-  const { cheapPrice, googlePrice, googlePriceLevel, bestGooglePrice = null, isNewBestGoogle = false } = prices;
-  const cur = 'USD';
-  const adults   = flight.adults || 1;
-  const children = flight.children || 0;
+  const {
+    cheapPrice, googlePrice, googlePriceLevel, fliPrice,
+    primaryPrice, primaryPriceSource,
+    bestPrice = null, bestPriceSource = null, isNewBestPrice = false
+  } = prices;
+  const adults     = flight.adults || 1;
+  const children   = flight.children || 0;
   const passengers = adults + children;
 
-  // Booking URLs
+  // Booking URL
   let googleFlightsUrl;
   if (flight.returnDate) {
     googleFlightsUrl = `https://www.google.com/travel/flights?q=flights%20from%20${flight.origin}%20to%20${flight.destination}%20on%20${flight.departureDate}%20return%20${flight.returnDate}%20${adults}%20adult${adults > 1 ? 's' : ''}${children > 0 ? '%20' + children + '%20child' + (children > 1 ? 'ren' : '') : ''}`;
@@ -175,24 +211,39 @@ async function sendTelegramNotification(flight, prices, trendScore, triggerType,
     googleFlightsUrl = `https://www.google.com/travel/flights?q=flights%20from%20${flight.origin}%20to%20${flight.destination}%20on%20${flight.departureDate}%20${adults}%20adult${adults > 1 ? 's' : ''}${children > 0 ? '%20' + children + '%20child' + (children > 1 ? 'ren' : '') : ''}`;
   }
 
-  // Price lines
-  const priceLineItems = [];
-  if (googlePrice != null) {
-    priceLineItems.push(`  ✈️ Google: $${googlePrice.toFixed(2)}${googlePriceLevel ? ' (' + googlePriceLevel + ')' : ''}`);
-  }
-  if (bestGooglePrice != null) {
-    if (isNewBestGoogle) {
-      priceLineItems.push(`  🏆 Best ever: $${bestGooglePrice.toFixed(2)} — NEW BEST!`);
-    } else if (googlePrice != null && googlePrice > bestGooglePrice) {
-      const abovePct = ((googlePrice - bestGooglePrice) / bestGooglePrice * 100).toFixed(1);
-      priceLineItems.push(`  📊 Best ever: $${bestGooglePrice.toFixed(2)} (+${abovePct}% above)`);
+  // Best price header line
+  const bestHeader = primaryPrice != null && primaryPriceSource
+    ? `Best Price (${passengers} pax): $${primaryPrice.toFixed(2)} ✅ ${primaryPriceSource}\n`
+    : '';
+
+  // Per-source price rows
+  const sourceRows = [
+    { label: '✈️ Google Flights', price: googlePrice, level: googlePriceLevel, id: 'Google Flights' },
+    { label: '🔍 fli Scanner',    price: fliPrice,    level: null,             id: 'fli Scanner' },
+    { label: '📊 Travelpayouts',  price: cheapPrice,  level: null,             id: 'Travelpayouts' }
+  ];
+  const priceLineItems = sourceRows
+    .filter(s => s.price != null)
+    .map(s => {
+      const levelStr = s.level ? ` (${s.level})` : '';
+      const winMark  = s.id === primaryPriceSource ? '  ✅' : '';
+      return `  ${s.label}: $${s.price.toFixed(2)}${levelStr}${winMark}`;
+    });
+
+  // All-time best price line
+  if (bestPrice != null) {
+    const sourceStr = bestPriceSource ? ` via ${bestPriceSource}` : '';
+    if (isNewBestPrice) {
+      priceLineItems.push(`  🏆 Best ever: $${bestPrice.toFixed(2)} — NEW BEST!${sourceStr}`);
+    } else if (primaryPrice != null && primaryPrice > bestPrice) {
+      const abovePct = ((primaryPrice - bestPrice) / bestPrice * 100).toFixed(1);
+      priceLineItems.push(`  📊 Best ever: $${bestPrice.toFixed(2)} (+${abovePct}% above)${sourceStr}`);
     } else {
-      priceLineItems.push(`  🏆 Best ever: $${bestGooglePrice.toFixed(2)}`);
+      priceLineItems.push(`  🏆 Best ever: $${bestPrice.toFixed(2)}${sourceStr}`);
     }
   }
-  const priceLines = priceLineItems.join('\n');
 
-  // Top flight details (compact)
+  // Top flight detail block
   const stopsLabel = topFlight
     ? (topFlight.stops === 0 ? 'Nonstop' : `${topFlight.stops} stop${topFlight.stops > 1 ? 's' : ''}`)
     : '';
@@ -205,7 +256,7 @@ async function sendTelegramNotification(flight, prices, trendScore, triggerType,
 
   const msg =
     `🚨 ${originDisplay} → ${flight.destination} (${flight.departureDate})\n\n` +
-    `Prices (${passengers} pax):\n${priceLines}${flightDetailsBlock}\n\n` +
+    `${bestHeader}\nAll Prices:\n${priceLineItems.join('\n')}${flightDetailsBlock}\n\n` +
     `🔗 Google Flights: ${googleFlightsUrl}`;
 
   try {
@@ -248,13 +299,13 @@ exports.checkFlightPrices = onSchedule({ schedule: '0 6,12,18 * * *', timeZone: 
       }
 
       // Fetch price — retry up to twice with 3s gap if Google returns n/a
-      let { cheapPrice, googlePrice, googlePriceLevel, googleFlightsList, topFlight } = await fetchPrice(flight);
+      let { cheapPrice, googlePrice, googlePriceLevel, googleFlightsList, topFlight, fliPrice, fliTopFlight, fliFlightsList } = await fetchPrice(flight);
       for (let attempt = 1; attempt <= 2 && googlePrice === null; attempt++) {
         console.log(`[${flight.origin}-${flight.destination}] Google n/a, retry ${attempt}/2 in 3s...`);
         await sleep(3000);
         const retry = await fetchPrice(flight);
         if (retry.googlePrice !== null) {
-          ({ cheapPrice, googlePrice, googlePriceLevel, googleFlightsList, topFlight } = retry);
+          ({ cheapPrice, googlePrice, googlePriceLevel, googleFlightsList, topFlight, fliPrice, fliTopFlight, fliFlightsList } = retry);
           console.log(`[${flight.origin}-${flight.destination}] Retry ${attempt} succeeded: ${googlePrice}`);
         }
       }
@@ -262,30 +313,46 @@ exports.checkFlightPrices = onSchedule({ schedule: '0 6,12,18 * * *', timeZone: 
       // Delay between flights to avoid rate limiting on Google Flights scraper
       await sleep(30000);
 
-      // Primary price: Google first, fall back to cheap
-      const primaryPrice = googlePrice ?? cheapPrice ?? null;
+      // Best price from all three sources
+      const candidates = [
+        { price: googlePrice, source: 'Google Flights' },
+        { price: fliPrice,    source: 'fli Scanner' },
+        { price: cheapPrice,  source: 'Travelpayouts' }
+      ].filter(c => c.price !== null);
 
-      if (primaryPrice === null) {
+      if (candidates.length === 0) {
         console.warn(`Skipping flight ${doc.id}: no price data from any source`);
         continue;
       }
 
+      const bestCandidate    = candidates.reduce((a, b) => a.price <= b.price ? a : b);
+      const primaryPrice     = bestCandidate.price;
+      const primaryPriceSource = bestCandidate.source;
+
+      // topFlight from whichever source won (prefer Google for richer data)
+      const alertTopFlight = primaryPriceSource === 'fli Scanner' ? fliTopFlight : topFlight;
+
       // Store price history
       await db.collection("priceHistory").add({
-        flightId: doc.id,
-        price: primaryPrice,
-        googlePrice: googlePrice ?? null,
+        flightId:        doc.id,
+        price:           primaryPrice,
+        googlePrice:     googlePrice ?? null,
         googlePriceLevel: googlePriceLevel ?? null,
-        cheapPrice: cheapPrice ?? null,
-        checkedAt: admin.firestore.FieldValue.serverTimestamp()
+        cheapPrice:      cheapPrice ?? null,
+        fliPrice:        fliPrice ?? null,
+        checkedAt:       admin.firestore.FieldValue.serverTimestamp()
       });
 
       const trendScore = await computePriceTrend(doc.id);
 
-      // Compute best Google price seen since tracking started
-      const prevBestGoogle = flight.bestGooglePrice ?? null;
-      // Only true when we're beating an existing best (not recording first-ever price)
-      const isNewBestGoogle = googlePrice !== null && prevBestGoogle !== null && googlePrice < prevBestGoogle;
+      // Cross-source best price tracking
+      const prevBestPrice  = flight.bestPrice ?? null;
+      const isNewBestPrice = prevBestPrice !== null && primaryPrice < prevBestPrice;
+      const newBestPrice   = prevBestPrice !== null ? Math.min(prevBestPrice, primaryPrice) : primaryPrice;
+      const newBestPriceSource = isNewBestPrice ? primaryPriceSource : (flight.bestPriceSource ?? primaryPriceSource);
+
+      // Keep Google-only best for chart continuity
+      const prevBestGoogle     = flight.bestGooglePrice ?? null;
       const newBestGooglePrice = googlePrice !== null
         ? (prevBestGoogle !== null ? Math.min(prevBestGoogle, googlePrice) : googlePrice)
         : prevBestGoogle;
@@ -293,41 +360,44 @@ exports.checkFlightPrices = onSchedule({ schedule: '0 6,12,18 * * *', timeZone: 
       let sendAlert = false;
       let triggerType = "";
 
-      // New all-time best always triggers an alert (only when beating a known previous best)
-      if (isNewBestGoogle) {
+      // New all-time best across any source (only fires when beating a known previous best)
+      if (isNewBestPrice) {
         sendAlert = true;
-        triggerType = 'new all-time best Google price';
+        triggerType = `new all-time best price via ${primaryPriceSource}`;
       }
 
-      // Check for Google price drop vs last stored value (cache price excluded from alerts)
-      const priceChecks = [
-        { label: 'Google Flights', current: googlePrice, last: flight.lastGooglePrice }
-      ];
-      for (const { label, current, last } of priceChecks) {
-        if (current != null && last != null && last > 0) {
-          const dropPercent = ((last - current) / last) * 100;
-          if (dropPercent >= flight.alertPercentage) {
-            sendAlert = true;
-            triggerType += (triggerType ? ', ' : '') + `${label} price drop (${dropPercent.toFixed(1)}%)`;
-          }
+      // Price drop vs last recorded best price (any source)
+      if (flight.lastPrice != null && flight.lastPrice > 0) {
+        const dropPercent = ((flight.lastPrice - primaryPrice) / flight.lastPrice) * 100;
+        if (dropPercent >= flight.alertPercentage) {
+          sendAlert = true;
+          triggerType += (triggerType ? ', ' : '') + `${primaryPriceSource} price drop (${dropPercent.toFixed(1)}%)`;
         }
       }
 
       if (sendAlert) {
-        await sendTelegramNotification(flight, { cheapPrice, googlePrice, googlePriceLevel, bestGooglePrice: newBestGooglePrice, isNewBestGoogle }, trendScore, triggerType, topFlight);
+        await sendTelegramNotification(
+          flight,
+          { cheapPrice, googlePrice, googlePriceLevel, fliPrice, primaryPrice, primaryPriceSource, bestPrice: newBestPrice, bestPriceSource: newBestPriceSource, isNewBestPrice },
+          trendScore, triggerType, alertTopFlight
+        );
       } else {
-        console.log(`No alert for ${doc.id} (google: ${googlePrice ?? 'n/a'}, cheap: ${cheapPrice ?? 'n/a'}, trend: ${trendScore.toFixed(2)})`);
+        console.log(`No alert for ${doc.id} (google: ${googlePrice ?? 'n/a'}, fli: ${fliPrice ?? 'n/a'}, cheap: ${cheapPrice ?? 'n/a'}, best: ${primaryPrice} via ${primaryPriceSource}, trend: ${trendScore.toFixed(2)})`);
       }
 
       // Update tracked flight
       await doc.ref.update({
         lastPrice:            primaryPrice,
+        lastPriceSource:      primaryPriceSource,
         lastGooglePrice:      googlePrice ?? null,
         lastGooglePriceLevel: googlePriceLevel ?? null,
         lastCheapPrice:       cheapPrice ?? null,
+        lastFliPrice:         fliPrice ?? null,
         lastGoogleFlights:    googleFlightsList.length > 0 ? googleFlightsList : [],
         lastChecked:          admin.firestore.FieldValue.serverTimestamp(),
-        bestGooglePrice:      newBestGooglePrice
+        bestGooglePrice:      newBestGooglePrice,
+        bestPrice:            newBestPrice,
+        bestPriceSource:      newBestPriceSource
       });
 
       // Be polite to APIs
@@ -356,12 +426,16 @@ exports.getLivePrice = onCall(async (request) => {
     if (!flightDoc.exists) throw new Error('Flight not found');
 
     const flight = flightDoc.data();
-    const { cheapPrice, googlePrice, googlePriceLevel, googleFlightsList, topFlight } = await fetchPrice(flight);
+    const { cheapPrice, googlePrice, googlePriceLevel, googleFlightsList, topFlight, fliPrice, fliTopFlight, fliFlightsList } = await fetchPrice(flight);
 
-    const primaryPrice = googlePrice ?? cheapPrice ?? null;
+    const candidates = [
+      { price: googlePrice, source: 'Google Flights' },
+      { price: fliPrice,    source: 'fli Scanner' },
+      { price: cheapPrice,  source: 'Travelpayouts' }
+    ].filter(c => c.price !== null);
 
-    if (primaryPrice === null) {
-      const reason = 'No price data found — Travelpayouts may not have cached pricing and Google Flights returned no results. Try again later.';
+    if (candidates.length === 0) {
+      const reason = 'No price data found from any source. Try again later.';
       console.warn(`getLivePrice: no price for ${flight.origin}-${flight.destination}`);
       return {
         success: false,
@@ -371,40 +445,57 @@ exports.getLivePrice = onCall(async (request) => {
       };
     }
 
-    console.log(`Live prices — google: ${googlePrice ?? 'n/a'}, cheap: ${cheapPrice ?? 'n/a'} USD`);
+    const bestCandidate    = candidates.reduce((a, b) => a.price <= b.price ? a : b);
+    const primaryPrice     = bestCandidate.price;
+    const primaryPriceSource = bestCandidate.source;
 
-    const prevBestGoogle = flight.bestGooglePrice ?? null;
+    console.log(`Live prices — google: ${googlePrice ?? 'n/a'}, fli: ${fliPrice ?? 'n/a'}, cheap: ${cheapPrice ?? 'n/a'} USD — best: ${primaryPrice} via ${primaryPriceSource}`);
+
+    const prevBestPrice  = flight.bestPrice ?? null;
+    const newBestPrice   = prevBestPrice !== null ? Math.min(prevBestPrice, primaryPrice) : primaryPrice;
+    const newBestPriceSource = (prevBestPrice === null || primaryPrice <= prevBestPrice)
+      ? primaryPriceSource
+      : (flight.bestPriceSource ?? primaryPriceSource);
+
+    const prevBestGoogle     = flight.bestGooglePrice ?? null;
     const newBestGooglePrice = googlePrice !== null
       ? (prevBestGoogle !== null ? Math.min(prevBestGoogle, googlePrice) : googlePrice)
       : prevBestGoogle;
 
     await db.collection('priceHistory').add({
       flightId,
-      price: primaryPrice,
-      googlePrice: googlePrice ?? null,
+      price:           primaryPrice,
+      googlePrice:     googlePrice ?? null,
       googlePriceLevel: googlePriceLevel ?? null,
-      cheapPrice: cheapPrice ?? null,
-      checkedAt: admin.firestore.FieldValue.serverTimestamp()
+      cheapPrice:      cheapPrice ?? null,
+      fliPrice:        fliPrice ?? null,
+      checkedAt:       admin.firestore.FieldValue.serverTimestamp()
     });
 
     await flightDoc.ref.update({
       lastPrice:            primaryPrice,
+      lastPriceSource:      primaryPriceSource,
       lastGooglePrice:      googlePrice ?? null,
       lastGooglePriceLevel: googlePriceLevel ?? null,
       lastCheapPrice:       cheapPrice ?? null,
+      lastFliPrice:         fliPrice ?? null,
       lastGoogleFlights:    googleFlightsList.length > 0 ? googleFlightsList : [],
       lastChecked:          admin.firestore.FieldValue.serverTimestamp(),
-      bestGooglePrice:      newBestGooglePrice
+      bestGooglePrice:      newBestGooglePrice,
+      bestPrice:            newBestPrice,
+      bestPriceSource:      newBestPriceSource
     });
 
     console.log('Prices added to history and flight updated');
 
     return {
       success: true,
-      price: primaryPrice,
-      googlePrice: googlePrice ?? null,
+      price:           primaryPrice,
+      priceSource:     primaryPriceSource,
+      googlePrice:     googlePrice ?? null,
       googlePriceLevel: googlePriceLevel ?? null,
-      cheapPrice: cheapPrice ?? null,
+      cheapPrice:      cheapPrice ?? null,
+      fliPrice:        fliPrice ?? null,
       currency: 'USD',
       flight: {
         origin: flight.origin,
@@ -437,10 +528,12 @@ exports.sendTestTelegram = onCall(async (request) => {
 
     const testMessage =
       `🧪 Test Alert: ${originDisplay} → ${flight.destination} (${flight.departureDate})\n` +
-      `This is a test notification from your Flight Price Tracker.\n` +
-      `Last Google Price: ${flight.lastGooglePrice ? flight.lastGooglePrice.toFixed(2) + ' USD' : 'N/A'}\n` +
-      `Best Google Ever:  ${flight.bestGooglePrice ? flight.bestGooglePrice.toFixed(2) + ' USD' : 'N/A'}\n` +
-      `Last Best Cached: ${flight.lastCheapPrice ? flight.lastCheapPrice.toFixed(2) + ' USD' : 'N/A'}\n` +
+      `This is a test notification from your Flight Price Tracker.\n\n` +
+      `Last Prices:\n` +
+      `  ✈️ Google Flights: ${flight.lastGooglePrice ? '$' + flight.lastGooglePrice.toFixed(2) : 'N/A'}\n` +
+      `  🔍 fli Scanner:   ${flight.lastFliPrice    ? '$' + flight.lastFliPrice.toFixed(2)    : 'N/A'}\n` +
+      `  📊 Travelpayouts: ${flight.lastCheapPrice  ? '$' + flight.lastCheapPrice.toFixed(2)  : 'N/A'}\n\n` +
+      `Best Price Ever: ${flight.bestPrice ? '$' + flight.bestPrice.toFixed(2) + ' via ' + (flight.bestPriceSource || '?') : 'N/A'}\n` +
       `Alert Threshold: ${flight.alertPercentage}%`;
 
     await axios.post(

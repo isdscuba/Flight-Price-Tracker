@@ -614,6 +614,20 @@ body {
 .price-level-typical{ background: var(--warning-light); color: #92400E; }
 .price-level-high   { background: var(--danger-light);  color: var(--danger); }
 
+.price-source-badge {
+  display: inline-block;
+  margin-left: 5px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.62rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  vertical-align: middle;
+  background: var(--bg-secondary, #e5e7eb);
+  color: var(--text-muted, #6b7280);
+}
+
 .trend-score {
   display: inline-block;
   padding: 2px 7px;

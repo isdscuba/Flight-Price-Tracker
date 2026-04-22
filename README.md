@@ -5,28 +5,43 @@ Tracks flight prices on a schedule and sends Telegram alerts when prices drop or
 ## What it does
 
 - Add flights to track with origin, destination, dates, and alert thresholds
-- Checks prices twice a day (8am and 8pm ET by default) via the Travelpayouts Data API
-- Sends a Telegram message every check — an alert if something significant changed, a brief update if not
+- Checks prices three times a day (6am, 12pm, 6pm ET) from three independent sources in parallel
+- Uses the **lowest price from any source** as the trigger — alerts tell you which source found it
+- Sends a Telegram alert when a new all-time best price is found or prices drop by your threshold
+- Every alert shows all three prices side-by-side with a ✅ marking the winner
 - Detects unusual price movements using z-score analysis against the last 20 data points
 - Shows price history as charts in the UI
 
-## Third-party APIs
+## Price sources
 
-**Travelpayouts Data API** — This is what powers the price data. Travelpayouts is an affiliate travel platform (owned by Aviasales) that exposes cached flight prices for free. It's not a real-time booking API — prices are updated multiple times a day but may lag live fares by a few hours. Free, no approval required, no paid tier needed for personal use. Sign up at [travelpayouts.com](https://www.travelpayouts.com/).
+Three sources are fetched in parallel on every check. The lowest price from any source drives alerts.
 
-**`fast_flights` (Python, `functions-python/main.py`)** — The repo also contains an experimental Python backend using the [`fast_flights`](https://github.com/AWeirdDev/flights) library, which scrapes Google Flights directly. This is a third-party scraper, not an official API. It's included as an alternative price source but is not the default backend. Use it with awareness: scrapers can break when the target site changes, and terms of service may apply.
+| Source | Type | Notes |
+|--------|------|-------|
+| **Google Flights** (Cloud Run) | `fast_flights` scraper | Real-time; scrapes Google Flights HTML. Can break if Google changes its structure. |
+| **fli Scanner** (Cloud Run) | Reverse-engineered Google Flights API (`pip install flights`) | Real-time; faster and more stable than HTML scraping since it uses Google's private API. Same data source as above but different method. |
+| **Travelpayouts** | Cached affiliate API | Prices updated multiple times daily; may lag live fares by a few hours. Free, no approval needed. |
+
+Both Google Flights sources and Travelpayouts use the same Cloud Run service (`functions-python/`). Adding `fli` as a second Google Flights method provides redundancy — if one scraping method fails, the other may still return a price.
 
 **Telegram Bot API** — For notifications. Free, no limits for personal use.
 
 ## Architecture
 
 ```
-Cloud Scheduler (cron: 0 8,20 * * *)
+Cloud Scheduler (cron: 0 6,12,18 * * * ET)
   → Firebase Cloud Function (Node.js 20)
-    → Travelpayouts Data API (price fetch per flight)
-    → z-score check against last 20 prices (Firestore)
-    → Telegram alert or update
-    → Firestore write (price history)
+    → [parallel] Google Flights Cloud Run (/price)     → googlePrice
+    → [parallel] fli Scanner Cloud Run (/fli-price)    → fliPrice
+    → [parallel] Travelpayouts Data API                → cheapPrice
+    → best = min(googlePrice, fliPrice, cheapPrice)
+    → alert if new all-time best OR drop ≥ threshold
+    → Telegram: shows all 3 prices + source attribution
+    → Firestore write (price history + bestPrice/bestPriceSource)
+
+Cloud Run (Python, functions-python/)
+  → /price      fast_flights scraper
+  → /fli-price  fli reverse-engineered API
 
 Browser
   → Firebase Hosting (static HTML/JS)
@@ -152,4 +167,4 @@ flight-tracker/
 
 ## License
 
-MIT. Note: `fast_flights` (the Google Flights scraper in `functions-python/`) is an independent open-source library with its own MIT license. Travelpayouts API usage is subject to [their terms of service](https://www.travelpayouts.com/terms).
+MIT. Note: `fast_flights` and `fli` (both in `functions-python/`) are independent open-source libraries with their own MIT licenses. Travelpayouts API usage is subject to [their terms of service](https://www.travelpayouts.com/terms). The `fli` library (`pip install flights`) reverse-engineers Google Flights' private API — use with awareness of Google's terms of service.

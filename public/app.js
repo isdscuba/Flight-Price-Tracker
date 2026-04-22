@@ -213,16 +213,23 @@ async function createFlightCard(flightId, flight) {
     any: 'ANY STOPS'
   }[flight.stopsPreference || 'any'] || 'ANY STOPS';
 
-  // Best Google price badge (shown on current price row)
+  // Best price badge (cross-source) shown on current best price row
   let vsBestBadge = '';
-  if (flight.bestGooglePrice != null && flight.lastGooglePrice != null) {
-    if (flight.lastGooglePrice <= flight.bestGooglePrice) {
+  const refBest  = flight.bestPrice ?? flight.bestGooglePrice ?? null;
+  const refLast  = flight.lastPrice ?? flight.lastGooglePrice ?? null;
+  if (refBest != null && refLast != null) {
+    if (refLast <= refBest) {
       vsBestBadge = '<span class="best-price-badge best-price-new">🏆 Best</span>';
     } else {
-      const abovePct = ((flight.lastGooglePrice - flight.bestGooglePrice) / flight.bestGooglePrice * 100).toFixed(1);
+      const abovePct = ((refLast - refBest) / refBest * 100).toFixed(1);
       vsBestBadge = `<span class="best-price-badge best-price-above">+${abovePct}% vs best</span>`;
     }
   }
+
+  // Source badge for the last best price
+  const sourceBadge = flight.lastPriceSource
+    ? `<span class="price-source-badge">${flight.lastPriceSource}</span>`
+    : '';
 
   // Filter summary for display
   const filterParts = [];
@@ -265,27 +272,43 @@ async function createFlightCard(flightId, flight) {
           <span class="detail-value">${flight.adults} adult${flight.adults > 1 ? 's' : ''}${flight.children ? ', ' + flight.children + ' child' + (flight.children > 1 ? 'ren' : '') : ''}</span>
         </div>
         <div class="detail-item">
+          <span class="detail-label">Best Price</span>
+          <span class="detail-value price-google">
+            ${flight.lastPrice != null
+              ? `$${flight.lastPrice.toFixed(0)}${sourceBadge}${vsBestBadge}`
+              : '<span style="color:var(--text-faint);font-size:0.8rem;font-weight:400;">Pending</span>'}
+          </span>
+        </div>
+        <div class="detail-item">
           <span class="detail-label">Google Flights</span>
           <span class="detail-value price-google">
-            ${flight.lastGooglePrice
+            ${flight.lastGooglePrice != null
               ? `$${flight.lastGooglePrice.toFixed(0)}${flight.lastGooglePriceLevel
                   ? `<span class="price-level-badge price-level-${flight.lastGooglePriceLevel}">${flight.lastGooglePriceLevel}</span>`
-                  : ''}${vsBestBadge}`
-              : '<span style="color:var(--text-faint);font-size:0.8rem;font-weight:400;">Pending</span>'}
+                  : ''}`
+              : '<span style="color:var(--text-faint);font-size:0.8rem;font-weight:400;">—</span>'}
           </span>
         </div>
         <div class="detail-item">
-          <span class="detail-label">Best Google</span>
-          <span class="detail-value price-best-google">
-            ${flight.bestGooglePrice
-              ? `$${flight.bestGooglePrice.toFixed(0)}`
-              : '<span style="color:var(--text-faint);font-size:0.8rem;font-weight:400;">Pending</span>'}
+          <span class="detail-label">fli Scanner</span>
+          <span class="detail-value price-fli">
+            ${flight.lastFliPrice != null
+              ? `$${flight.lastFliPrice.toFixed(0)}`
+              : '<span style="color:var(--text-faint);font-size:0.8rem;font-weight:400;">—</span>'}
           </span>
         </div>
         <div class="detail-item">
-          <span class="detail-label">Best Cached</span>
+          <span class="detail-label">Travelpayouts</span>
           <span class="detail-value price-cached">
-            ${flight.lastCheapPrice ? `$${flight.lastCheapPrice.toFixed(0)}` : '—'}
+            ${flight.lastCheapPrice != null ? `$${flight.lastCheapPrice.toFixed(0)}` : '—'}
+          </span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Best Ever</span>
+          <span class="detail-value price-best-google">
+            ${(flight.bestPrice ?? flight.bestGooglePrice) != null
+              ? `$${(flight.bestPrice ?? flight.bestGooglePrice).toFixed(0)}${flight.bestPriceSource ? `<span class="price-source-badge">${flight.bestPriceSource}</span>` : ''}`
+              : '<span style="color:var(--text-faint);font-size:0.8rem;font-weight:400;">Pending</span>'}
           </span>
         </div>
         <div class="detail-item">
