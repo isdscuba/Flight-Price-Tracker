@@ -7,7 +7,11 @@ from fast_flights import FlightData, Passengers, get_flights
 
 try:
     from fli.search import SearchFlights
-    from fli.models import FlightSearchFilters, PassengerInfo as FliPassengerInfo, SeatType, Airport, MaxStops
+    from fli.models import (
+        FlightSearchFilters, FlightSegment, PassengerInfo as FliPassengerInfo,
+        SeatType, Airport, MaxStops, TripType
+    )
+    from fli.models.google_flights.base import TimeRestrictions
     FLI_AVAILABLE = True
 except ImportError:
     FLI_AVAILABLE = False
@@ -260,6 +264,7 @@ def get_fli_price():
     origin_raw        = body.get("origin")
     destination       = body.get("destination")
     departure_date    = body.get("departureDate")
+    return_date       = body.get("returnDate")
     adults            = int(body.get("adults", 1))
     children          = int(body.get("children", 0))
     stops_preference  = body.get("stopsPreference", "any")
@@ -276,7 +281,7 @@ def get_fli_price():
         origins = [s.strip().upper() for s in str(origin_raw).split(',') if s.strip()]
 
     stops_map = {"direct": MaxStops.NON_STOP, "1stop": MaxStops.ONE_STOP_OR_FEWER, "any": MaxStops.ANY}
-    max_stops = stops_map.get(stops_preference, MaxStops.ANY)
+    max_stops_val = stops_map.get(stops_preference, MaxStops.ANY)
 
     total_passengers = adults + children
     passenger_info = FliPassengerInfo(adults=total_passengers)
@@ -287,101 +292,145 @@ def get_fli_price():
         logging.warning(f"fli: unknown destination airport: {destination}")
         return jsonify({"fliPrice": None, "priceLevel": None, "flightCount": 0, "flights": [], "topFlight": None})
 
-    all_flights = []
-    search_client = SearchFlights()
-
+    # Resolve valid origin airports
+    valid_origins = []
     for orig in origins:
         try:
-            origin_airport = Airport[orig]
+            valid_origins.append(Airport[orig])
         except KeyError:
             logging.warning(f"fli: unknown origin airport: {orig}, skipping")
-            continue
-        try:
-            filters = FlightSearchFilters(
-                origin=origin_airport,
-                destination=dest_airport,
-                departure_date=departure_date,
-                passenger_info=passenger_info,
-                seat_type=SeatType.ECONOMY,
-                max_stops=max_stops,
-            )
-            results = search_client.search(filters)
-            if results:
-                all_flights.extend(results)
-                logging.info(f"fli: {orig}->{destination}: {len(results)} flights")
-        except Exception as e:
-            logging.warning(f"fli: {orig}->{destination} error: {e}")
 
-    if not all_flights:
+    if not valid_origins:
         return jsonify({"fliPrice": None, "priceLevel": None, "flightCount": 0, "flights": [], "topFlight": None})
 
-    def get_airline(f):
-        return getattr(f, 'airline', None) or getattr(f, 'name', '') or ''
+    # Build time restrictions (hours, 0-23)
+    after_t  = parse_hhmm(depart_after_str)
+    before_t = parse_hhmm(depart_before_str)
+    time_restr = None
+    if after_t or before_t:
+        time_restr = TimeRestrictions(
+            earliest_departure=after_t.hour  if after_t  else None,
+            latest_departure=before_t.hour   if before_t else None,
+        )
 
-    # Drop no-price or no-airline rows
+    # fli supports multiple departure airports in one segment via [[Airport, 0], ...]
+    origin_pairs = [[ap, 0] for ap in valid_origins]
+    dest_pairs   = [[dest_airport, 0]]
+
+    outbound = FlightSegment(
+        departure_airport=origin_pairs,
+        arrival_airport=dest_pairs,
+        travel_date=departure_date,
+        time_restrictions=time_restr,
+    )
+    segments = [outbound]
+    if return_date:
+        segments.append(FlightSegment(
+            departure_airport=dest_pairs,
+            arrival_airport=[[valid_origins[0], 0]],
+            travel_date=return_date,
+        ))
+
+    filters = FlightSearchFilters(
+        trip_type=TripType.ROUND_TRIP if return_date else TripType.ONE_WAY,
+        passenger_info=passenger_info,
+        flight_segments=segments,
+        stops=max_stops_val,
+        seat_type=SeatType.ECONOMY,
+    )
+
+    try:
+        all_results = SearchFlights().search(filters) or []
+        logging.info(f"fli: {origins}->{destination}: {len(all_results)} flights raw")
+    except Exception as e:
+        logging.warning(f"fli: search error: {e}")
+        return jsonify({"fliPrice": None, "priceLevel": None, "flightCount": 0, "flights": [], "topFlight": None})
+
+    def fli_airline(f):
+        try:
+            return f.legs[0].airline.value if f.legs else ''
+        except Exception:
+            return ''
+
+    def fli_departure(f):
+        try:
+            return f.legs[0].departure_datetime.strftime("%-I:%M %p") if f.legs else None
+        except Exception:
+            return None
+
+    def fli_arrival(f):
+        try:
+            return f.legs[-1].arrival_datetime.strftime("%-I:%M %p") if f.legs else None
+        except Exception:
+            return None
+
+    def fli_duration(f):
+        try:
+            m = f.duration
+            return f"{m // 60}h {m % 60}m"
+        except Exception:
+            return None
+
+    # Filter: must have price > 0 and airline
     flights = [
-        f for f in all_flights
-        if getattr(f, 'price', None) and str(getattr(f, 'price', '')).strip()
-        and get_airline(f).strip()
+        f for f in all_results
+        if getattr(f, 'price', None) and f.price > 0 and fli_airline(f).strip()
     ]
 
     # Exclude Frontier/Spirit
-    flights = [f for f in flights if not any(ex in get_airline(f).lower() for ex in EXCLUDED_AIRLINES)]
+    flights = [f for f in flights if not any(ex in fli_airline(f).lower() for ex in EXCLUDED_AIRLINES)]
 
-    # Departure time range
-    after_t  = parse_hhmm(depart_after_str)
-    before_t = parse_hhmm(depart_before_str)
+    # Departure time range (already applied via TimeRestrictions, but filter by minute too)
     if after_t or before_t:
-        def in_time_range(f):
-            ft = parse_flight_time(f.departure)
-            if ft is None:
+        def in_time_range_fli(f):
+            try:
+                if not f.legs:
+                    return True
+                dt = f.legs[0].departure_datetime.time()
+                if after_t  and dt < after_t:  return False
+                if before_t and dt > before_t: return False
                 return True
-            if after_t  and ft < after_t:  return False
-            if before_t and ft > before_t: return False
-            return True
-        flights = [f for f in flights if in_time_range(f)]
+            except Exception:
+                return True
+        flights = [f for f in flights if in_time_range_fli(f)]
 
-    # Max duration
+    # Max duration filter (f.duration is minutes)
     if max_duration_hrs is not None:
-        max_hrs = float(max_duration_hrs)
-        flights = [f for f in flights if duration_to_hrs(f.duration) <= max_hrs]
+        max_mins = float(max_duration_hrs) * 60
+        flights = [f for f in flights if getattr(f, 'duration', float('inf')) <= max_mins]
 
     if not flights:
         return jsonify({"fliPrice": None, "priceLevel": None, "flightCount": 0, "flights": [], "topFlight": None})
 
-    prices = [p for p in (parse_price(f.price) for f in flights) if p is not None]
+    prices = [f.price for f in flights if f.price]
     if not prices:
         return jsonify({"fliPrice": None, "priceLevel": None, "flightCount": len(flights), "flights": [], "topFlight": None})
 
     min_price = min(prices)
-
-    def flight_sort_key(f):
-        p = parse_price(f.price)
-        return p if p is not None else float('inf')
-    flights_sorted = sorted(flights, key=flight_sort_key)
+    flights_sorted = sorted(flights, key=lambda f: f.price if f.price else float('inf'))
 
     flight_list = []
     for f in flights_sorted[:10]:
         flight_list.append({
-            "airline":   get_airline(f),
-            "price":     f.price,
-            "departure": f.departure,
-            "arrival":   f.arrival,
-            "duration":  f.duration,
-            "stops":     stops_int(f),
-            "is_best":   getattr(f, 'is_best', False),
+            "airline":   fli_airline(f),
+            "price":     str(f.price),
+            "departure": fli_departure(f),
+            "arrival":   fli_arrival(f),
+            "duration":  fli_duration(f),
+            "stops":     getattr(f, 'stops', None),
+            "is_best":   False,
         })
 
     top_flight = None
     if flights_sorted:
         f = flights_sorted[0]
         top_flight = {
-            "airline":   get_airline(f),
-            "price":     f.price,
-            "departure": f.departure,
-            "arrival":   f.arrival,
-            "duration":  f.duration,
-            "stops":     stops_int(f),
+            "airline":   fli_airline(f),
+            "price":     str(f.price),
+            "departure": fli_departure(f),
+            "arrival":   fli_arrival(f),
+            "duration":  fli_duration(f),
+            "stops":     getattr(f, 'stops', None),
         }
 
     logging.info(f"fli: {origins}->{destination} {departure_date}: min={min_price}, {len(flights)} flights after filters")
