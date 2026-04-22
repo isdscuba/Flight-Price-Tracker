@@ -275,7 +275,7 @@ def get_fli_price():
     else:
         origins = [s.strip().upper() for s in str(origin_raw).split(',') if s.strip()]
 
-    stops_map = {"direct": MaxStops.NON_STOP, "1stop": MaxStops.ONE_STOP, "any": MaxStops.ANY}
+    stops_map = {"direct": MaxStops.NON_STOP, "1stop": MaxStops.ONE_STOP_OR_FEWER, "any": MaxStops.ANY}
     max_stops = stops_map.get(stops_preference, MaxStops.ANY)
 
     total_passengers = adults + children
