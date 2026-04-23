@@ -1,5 +1,6 @@
 const {onSchedule} = require('firebase-functions/v2/scheduler');
 const {onCall} = require('firebase-functions/v2/https');
+const {onDocumentCreated} = require('firebase-functions/v2/firestore');
 const {defineString} = require('firebase-functions/params');
 const admin = require('firebase-admin');
 const axios = require('axios');
@@ -255,9 +256,6 @@ exports.checkFlightPrices = onSchedule({ schedule: '0 6,12,18 * * *', timeZone: 
         }
       }
 
-      // Delay between flights to avoid rate limiting on Google Flights scraper
-      await sleep(30000);
-
       // Best price from Google and fli sources
       const candidates = [
         { price: googlePrice, source: 'Google Flights' },
@@ -342,7 +340,8 @@ exports.checkFlightPrices = onSchedule({ schedule: '0 6,12,18 * * *', timeZone: 
         bestPriceSource:      newBestPriceSource
       });
 
-      // Be polite to APIs
+      // Delay between flights to avoid rate limiting
+      await sleep(8000);
       await new Promise(resolve => setTimeout(resolve, 2000));
     }
 
@@ -447,6 +446,63 @@ exports.getLivePrice = onCall(async (request) => {
     throw new Error(`Failed to get live price: ${err.message}`);
   }
 });
+
+/**
+ * Firestore trigger — fetch price immediately when a new flight is added
+ */
+exports.onFlightAdded = onDocumentCreated(
+  { document: 'trackedFlights/{flightId}', timeoutSeconds: 60 },
+  async (event) => {
+    const flightId = event.params.flightId;
+    const flight   = event.data.data();
+
+    console.log(`onFlightAdded: fetching initial price for ${flightId} (${flight.origin}-${flight.destination})`);
+
+    try {
+      const { googlePrice, googlePriceLevel, googleFlightsList, fliPrice } = await fetchPrice(flight);
+
+      const candidates = [
+        { price: googlePrice, source: 'Google Flights' },
+        { price: fliPrice,    source: 'fli Scanner' }
+      ].filter(c => c.price !== null);
+
+      if (candidates.length === 0) {
+        console.warn(`onFlightAdded: no price data for ${flightId}`);
+        return;
+      }
+
+      const bestCandidate      = candidates.reduce((a, b) => a.price <= b.price ? a : b);
+      const primaryPrice       = bestCandidate.price;
+      const primaryPriceSource = bestCandidate.source;
+
+      await db.collection('priceHistory').add({
+        flightId,
+        price:            primaryPrice,
+        googlePrice:      googlePrice ?? null,
+        googlePriceLevel: googlePriceLevel ?? null,
+        fliPrice:         fliPrice ?? null,
+        checkedAt:        admin.firestore.FieldValue.serverTimestamp()
+      });
+
+      await event.data.ref.update({
+        lastPrice:            primaryPrice,
+        lastPriceSource:      primaryPriceSource,
+        lastGooglePrice:      googlePrice ?? null,
+        lastGooglePriceLevel: googlePriceLevel ?? null,
+        lastFliPrice:         fliPrice ?? null,
+        lastGoogleFlights:    googleFlightsList.length > 0 ? googleFlightsList : [],
+        lastChecked:          admin.firestore.FieldValue.serverTimestamp(),
+        bestGooglePrice:      googlePrice ?? null,
+        bestPrice:            primaryPrice,
+        bestPriceSource:      primaryPriceSource
+      });
+
+      console.log(`onFlightAdded: set initial price ${primaryPrice} via ${primaryPriceSource} for ${flightId}`);
+    } catch (err) {
+      console.error(`onFlightAdded error for ${flightId}:`, err);
+    }
+  }
+);
 
 /**
  * Callable: send test Telegram notification
