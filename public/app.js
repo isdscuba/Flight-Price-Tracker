@@ -144,17 +144,40 @@ function initApp() {
     const list = document.getElementById('flightList');
 
     if (snapshot.empty) {
-      list.innerHTML = '<div class="no-history">No tracked flights yet. Add one above to get started.</div>';
+      while (list.firstChild) list.removeChild(list.firstChild);
+      const empty = document.createElement('div');
+      empty.className = 'no-history';
+      empty.textContent = 'No tracked flights yet. Add one above to get started.';
+      list.appendChild(empty);
       return;
     }
 
-    list.innerHTML = '';
-
+    const fragment = document.createDocumentFragment();
     for (const doc of snapshot.docs) {
-      const flight = doc.data();
-      const card = await createFlightCard(doc.id, flight);
-      list.appendChild(card);
+      try {
+        const card = await createFlightCard(doc.id, doc.data());
+        fragment.appendChild(card);
+      } catch (err) {
+        console.error(`Failed to render flight ${doc.id}:`, err);
+        const errCard = document.createElement('div');
+        errCard.className = 'flight-card';
+        const msg = document.createElement('p');
+        msg.style.cssText = 'color:var(--text-faint);padding:1rem';
+        msg.textContent = `Could not display flight (${doc.id}): ${err.message}`;
+        errCard.appendChild(msg);
+        fragment.appendChild(errCard);
+      }
     }
+    while (list.firstChild) list.removeChild(list.firstChild);
+    list.appendChild(fragment);
+  }, (err) => {
+    console.error('Firestore snapshot error:', err);
+    const list = document.getElementById('flightList');
+    while (list.firstChild) list.removeChild(list.firstChild);
+    const msg = document.createElement('div');
+    msg.className = 'no-history';
+    msg.textContent = `Error loading flights: ${err.message}`;
+    list.appendChild(msg);
   });
 
   // Close modal on backdrop click
@@ -199,7 +222,7 @@ async function createFlightCard(flightId, flight) {
 
   const trendScore = await computePriceTrend(flightId);
 
-  const lastChecked = flight.lastChecked
+  const lastChecked = flight.lastChecked && typeof flight.lastChecked.toDate === 'function'
     ? new Date(flight.lastChecked.toDate()).toLocaleString()
     : 'Never';
 
