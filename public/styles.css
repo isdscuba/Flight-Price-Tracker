@@ -571,12 +571,6 @@ body {
   letter-spacing: -0.03em;
 }
 
-.price-cached {
-  font-size: 1rem;
-  font-weight: 700;
-  color: var(--warning);
-}
-
 .price-best-google {
   font-size: 1rem;
   font-weight: 700;

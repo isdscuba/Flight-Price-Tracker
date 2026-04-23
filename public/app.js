@@ -321,12 +321,6 @@ async function createFlightCard(flightId, flight) {
           </span>
         </div>
         <div class="detail-item">
-          <span class="detail-label">Travelpayouts</span>
-          <span class="detail-value price-cached">
-            ${flight.lastCheapPrice != null ? `$${flight.lastCheapPrice.toFixed(0)}` : '—'}
-          </span>
-        </div>
-        <div class="detail-item">
           <span class="detail-label">Best Ever</span>
           <span class="detail-value price-best-google">
             ${(flight.bestPrice ?? flight.bestGooglePrice) != null
@@ -586,10 +580,8 @@ async function renderChart(flightId) {
     });
 
     const googleData = snapshot.docs.map(d => d.data().googlePrice ?? null);
-    const cheapData  = snapshot.docs.map(d => d.data().cheapPrice ?? null);
 
     const hasGoogleData = googleData.some(v => v !== null);
-    const hasCheapData  = cheapData.some(v => v !== null);
 
     if (chartInstances[flightId]) {
       chartInstances[flightId].destroy();
@@ -615,25 +607,6 @@ async function renderChart(flightId) {
       });
     }
 
-    if (hasCheapData) {
-      datasets.push({
-        label: 'Best Cached',
-        data: cheapData,
-        borderColor: '#f9ab00',
-        backgroundColor: 'rgba(249, 171, 0, 0.04)',
-        borderWidth: 2,
-        borderDash: [5, 3],
-        fill: false,
-        tension: 0.4,
-        pointRadius: 3,
-        pointHoverRadius: 5,
-        pointBackgroundColor: '#f9ab00',
-        pointBorderColor: '#ffffff',
-        spanGaps: true,
-        order: 2
-      });
-    }
-
     chartInstances[flightId] = new Chart(canvas, {
       type: 'line',
       data: { labels, datasets },
@@ -642,7 +615,7 @@ async function renderChart(flightId) {
         maintainAspectRatio: true,
         plugins: {
           legend: {
-            display: hasGoogleData && hasCheapData,
+            display: false,
             labels: { color: '#5f6368', font: { size: 11 } }
           },
           tooltip: {
