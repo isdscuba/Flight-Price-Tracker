@@ -382,11 +382,9 @@ def get_fli_price():
             return None
 
     def fli_price_num(f):
-        # Round trips return (outbound, return) tuples; sum both legs
+        # Round trips return (outbound, return) tuples; outbound price is already the full RT cost
         if isinstance(f, tuple):
-            parts = [fli_price_num(leg) for leg in f]
-            valid = [p for p in parts if p is not None]
-            return sum(valid) if valid else None
+            return fli_price_num(f[0]) if f else None
         p = getattr(f, 'price', None)
         if p is None:
             return None
