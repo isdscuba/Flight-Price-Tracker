@@ -348,7 +348,11 @@ def get_fli_price():
 
     def fli_airline(f):
         try:
-            return f.legs[0].airline.value if f.legs else ''
+            if not f.legs:
+                return ''
+            airline = f.legs[0].airline
+            # fli may return an Airline enum or a plain string depending on version
+            return str(getattr(airline, 'value', airline))
         except Exception:
             return ''
 
@@ -371,11 +375,18 @@ def get_fli_price():
         except Exception:
             return None
 
-    # Filter: must have price > 0 and airline
-    flights = [
-        f for f in all_results
-        if getattr(f, 'price', None) and f.price > 0 and fli_airline(f).strip()
-    ]
+    def fli_price_num(f):
+        p = getattr(f, 'price', None)
+        if p is None:
+            return None
+        try:
+            v = float(p) if isinstance(p, (int, float)) else float(str(p).replace('$', '').replace(',', '').strip())
+            return v if v > 0 else None
+        except (ValueError, TypeError):
+            return None
+
+    # Filter: must have a parseable price > 0
+    flights = [f for f in all_results if fli_price_num(f) is not None]
 
     # Exclude Frontier/Spirit
     flights = [f for f in flights if not any(ex in fli_airline(f).lower() for ex in EXCLUDED_AIRLINES)]
@@ -402,12 +413,13 @@ def get_fli_price():
     if not flights:
         return jsonify({"fliPrice": None, "priceLevel": None, "flightCount": 0, "flights": [], "topFlight": None})
 
-    prices = [f.price for f in flights if f.price]
+    prices = [fli_price_num(f) for f in flights]
+    prices = [p for p in prices if p is not None]
     if not prices:
         return jsonify({"fliPrice": None, "priceLevel": None, "flightCount": len(flights), "flights": [], "topFlight": None})
 
     min_price = min(prices)
-    flights_sorted = sorted(flights, key=lambda f: f.price if f.price else float('inf'))
+    flights_sorted = sorted(flights, key=lambda f: fli_price_num(f) or float('inf'))
 
     flight_list = []
     for f in flights_sorted[:10]:
