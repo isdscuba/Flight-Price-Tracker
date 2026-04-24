@@ -342,8 +342,8 @@ def get_fli_price():
     try:
         all_results = SearchFlights().search(filters) or []
         logging.info(f"fli: {origins}->{destination}: {len(all_results)} flights raw")
-    except Exception as e:
-        logging.warning(f"fli: search error: {e}")
+    except BaseException as e:
+        logging.warning(f"fli: search error ({type(e).__name__}): {e}")
         return jsonify({"fliPrice": None, "priceLevel": None, "flightCount": 0, "flights": [], "topFlight": None})
 
     def fli_airline(f):
