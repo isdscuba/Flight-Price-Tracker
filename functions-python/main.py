@@ -346,36 +346,47 @@ def get_fli_price():
         logging.warning(f"fli: search error ({type(e).__name__}): {e}")
         return jsonify({"fliPrice": None, "priceLevel": None, "flightCount": 0, "flights": [], "topFlight": None})
 
+    def fli_outbound(f):
+        """Return the outbound leg object whether f is a Flight or (outbound, return) tuple."""
+        return f[0] if isinstance(f, tuple) else f
+
     def fli_airline(f):
         try:
-            if not f.legs:
+            leg = fli_outbound(f)
+            if not leg.legs:
                 return ''
-            airline = f.legs[0].airline
-            # fli may return an Airline enum or a plain string depending on version
+            airline = leg.legs[0].airline
             return str(getattr(airline, 'value', airline))
         except Exception:
             return ''
 
     def fli_departure(f):
         try:
-            return f.legs[0].departure_datetime.strftime("%-I:%M %p") if f.legs else None
+            leg = fli_outbound(f)
+            return leg.legs[0].departure_datetime.strftime("%-I:%M %p") if leg.legs else None
         except Exception:
             return None
 
     def fli_arrival(f):
         try:
-            return f.legs[-1].arrival_datetime.strftime("%-I:%M %p") if f.legs else None
+            leg = fli_outbound(f)
+            return leg.legs[-1].arrival_datetime.strftime("%-I:%M %p") if leg.legs else None
         except Exception:
             return None
 
     def fli_duration(f):
         try:
-            m = f.duration
+            m = fli_outbound(f).duration
             return f"{m // 60}h {m % 60}m"
         except Exception:
             return None
 
     def fli_price_num(f):
+        # Round trips return (outbound, return) tuples; sum both legs
+        if isinstance(f, tuple):
+            parts = [fli_price_num(leg) for leg in f]
+            valid = [p for p in parts if p is not None]
+            return sum(valid) if valid else None
         p = getattr(f, 'price', None)
         if p is None:
             return None
@@ -383,6 +394,7 @@ def get_fli_price():
             v = float(p) if isinstance(p, (int, float)) else float(str(p).replace('$', '').replace(',', '').strip())
             return v if v > 0 else None
         except (ValueError, TypeError):
+            logging.warning(f"fli_price_num: unparseable price={repr(p)} type={type(p).__name__}")
             return None
 
     # Filter: must have a parseable price > 0
@@ -395,9 +407,10 @@ def get_fli_price():
     if after_t or before_t:
         def in_time_range_fli(f):
             try:
-                if not f.legs:
+                leg = fli_outbound(f)
+                if not leg.legs:
                     return True
-                dt = f.legs[0].departure_datetime.time()
+                dt = leg.legs[0].departure_datetime.time()
                 if after_t  and dt < after_t:  return False
                 if before_t and dt > before_t: return False
                 return True
@@ -405,10 +418,10 @@ def get_fli_price():
                 return True
         flights = [f for f in flights if in_time_range_fli(f)]
 
-    # Max duration filter (f.duration is minutes)
+    # Max duration filter (f.duration is minutes; for tuples check outbound leg)
     if max_duration_hrs is not None:
         max_mins = float(max_duration_hrs) * 60
-        flights = [f for f in flights if getattr(f, 'duration', float('inf')) <= max_mins]
+        flights = [f for f in flights if getattr(fli_outbound(f), 'duration', float('inf')) <= max_mins]
 
     if not flights:
         return jsonify({"fliPrice": None, "priceLevel": None, "flightCount": 0, "flights": [], "topFlight": None})
@@ -425,11 +438,11 @@ def get_fli_price():
     for f in flights_sorted[:10]:
         flight_list.append({
             "airline":   fli_airline(f),
-            "price":     str(f.price),
+            "price":     str(fli_price_num(f)),
             "departure": fli_departure(f),
             "arrival":   fli_arrival(f),
             "duration":  fli_duration(f),
-            "stops":     getattr(f, 'stops', None),
+            "stops":     getattr(fli_outbound(f), 'stops', None),
             "is_best":   False,
         })
 
@@ -438,11 +451,11 @@ def get_fli_price():
         f = flights_sorted[0]
         top_flight = {
             "airline":   fli_airline(f),
-            "price":     str(f.price),
+            "price":     str(fli_price_num(f)),
             "departure": fli_departure(f),
             "arrival":   fli_arrival(f),
             "duration":  fli_duration(f),
-            "stops":     getattr(f, 'stops', None),
+            "stops":     getattr(fli_outbound(f), 'stops', None),
         }
 
     logging.info(f"fli: {origins}->{destination} {departure_date}: min={min_price}, {len(flights)} flights after filters")
