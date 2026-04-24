@@ -47,7 +47,7 @@ async function fetchPrice(flight) {
     const url = googlePriceFetcherUrl.value();
     if (!url) return null;
     try {
-      const resp = await axios.post(`${url}/price`, flightPayload, { headers: cloudRunHeaders, timeout: 20000 });
+      const resp = await axios.post(`${url}/price`, flightPayload, { headers: cloudRunHeaders, timeout: 50000 });
       return resp.data ?? null;
     } catch (e) {
       console.warn(`[${flight.origin}-${flight.destination}] Google Cloud Run error: ${e.message}`);
@@ -60,7 +60,7 @@ async function fetchPrice(flight) {
     const url = googlePriceFetcherUrl.value();
     if (!url) return null;
     try {
-      const resp = await axios.post(`${url}/fli-price`, flightPayload, { headers: cloudRunHeaders, timeout: 20000 });
+      const resp = await axios.post(`${url}/fli-price`, flightPayload, { headers: cloudRunHeaders, timeout: 50000 });
       return resp.data ?? null;
     } catch (e) {
       console.warn(`[${flight.origin}-${flight.destination}] fli error: ${e.message}`);
