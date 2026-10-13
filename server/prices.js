@@ -7,6 +7,21 @@ const TZ = 'America/New_York';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// fli Scanner is currently rejected by Google for every request (upstream break), so it is
+// off by default; set ENABLE_FLI=1 to try it again.
+const ENABLE_FLI = process.env.ENABLE_FLI === '1';
+
+// Global pacing: every price fetch (scheduled, retry, or UI button) waits for a slot at
+// least MIN_GAP_MS (+ jitter) after the previous one, so Google never sees a burst.
+const MIN_GAP_MS = parseInt(process.env.MIN_FETCH_GAP_MS || '15000', 10);
+let nextSlot = 0;
+async function gate() {
+  const now = Date.now();
+  const start = Math.max(now, nextSlot);
+  nextSlot = start + MIN_GAP_MS + Math.floor(Math.random() * 5000);
+  if (start > now) await sleep(start - now);
+}
+
 function todayET() {
   // en-CA formats as YYYY-MM-DD
   return new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date());
@@ -30,6 +45,7 @@ async function postJson(url, body, headers, timeoutMs) {
  * Any field may be null if no data.
  */
 async function fetchPrice(flight) {
+  await gate();
   const payload = {
     origin:             flight.origin,
     destination:        flight.destination,
@@ -54,7 +70,7 @@ async function fetchPrice(flight) {
     }
   };
 
-  const [gData, fData] = await Promise.all([call('/price', 'Google'), call('/fli-price', 'fli')]);
+  const [gData, fData] = await Promise.all([call('/price', 'Google'), ENABLE_FLI ? call('/fli-price', 'fli') : null]);
 
   let googlePrice = null, googlePriceLevel = null, googleFlightsList = [], topFlight = null;
   if (gData) {
@@ -261,8 +277,9 @@ async function checkAllFlights() {
 
         let r = await fetchPrice(flight);
         for (let attempt = 1; attempt <= 2 && r.googlePrice === null; attempt++) {
-          console.log(`[${flight.origin}-${flight.destination}] Google n/a, retry ${attempt}/2 in 3s...`);
-          await sleep(3000);
+          const backoff = attempt === 1 ? 20000 : 60000;
+          console.log(`[${flight.origin}-${flight.destination}] Google n/a, retry ${attempt}/2 in ${backoff / 1000}s...`);
+          await sleep(backoff);
           const retry = await fetchPrice(flight);
           if (retry.googlePrice !== null) r = retry;
         }
@@ -305,7 +322,7 @@ async function checkAllFlights() {
           bestGooglePrice: newBestGooglePrice, bestPrice: newBestPrice, bestPriceSource: newBestPriceSource
         }));
 
-        await sleep(10000); // spacing between flights to avoid rate limiting
+        await sleep(8000 + Math.floor(Math.random() * 7000)); // extra spacing between flights (on top of the global gate)
       } catch (err) {
         console.error(`checkAllFlights error for ${flight.id}:`, err);
       }
@@ -323,7 +340,7 @@ async function getLivePrice(flightId) {
 
   let r = await fetchPrice(flight);
   for (let attempt = 1; attempt <= 2 && r.googlePrice === null; attempt++) {
-    await sleep(3000);
+    await sleep(attempt === 1 ? 10000 : 30000);
     const retry = await fetchPrice(flight);
     if (retry.googlePrice !== null) r = retry;
   }

@@ -1,5 +1,6 @@
 import os
 import io
+import time
 import hmac
 from urllib.parse import quote
 import re
@@ -132,7 +133,9 @@ def get_price():
     # Fetch flights from each origin and merge
     all_flights = []
     origin_of = {}
-    for orig in origins:
+    for i, orig in enumerate(origins):
+        if i:
+            time.sleep(2)  # pace per-airport requests to Google
         try:
             flight_data_list = [FlightData(date=departure_date, from_airport=orig, to_airport=destination)]
             if return_date:
