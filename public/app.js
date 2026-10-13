@@ -326,16 +326,7 @@ function createFlightCard(flightId, flight) {
         <button class="btn-secondary" onclick="sendTestTelegram('${flightId}')" id="telegram-btn-${flightId}">
           Test Telegram
         </button>
-        <button class="btn-primary" onclick=\"openGoogleFlights('${flightId}')\">
-          Google Flights
-        </button>
-        <button class="btn-secondary" onclick=\"openKayak('${flightId}')\">
-          Kayak
-        </button>
-        <button class="btn-secondary" onclick=\"openSkyscanner('${flightId}')\">
-          Skyscanner
-        </button>
-        <button class="btn-edit" onclick=\"openEditModal('${flightId}')\">
+        <button class="btn-edit" onclick="openEditModal('${flightId}')">
           Edit
         </button>
         <button class="btn-danger" onclick="deleteFlight('${flightId}')">
@@ -436,39 +427,6 @@ async function sendTestTelegram(flightId) {
     btn.disabled = false;
     btn.textContent = 'Test Telegram';
   }
-}
-
-// ── Booking links ─────────────────────────────────────────────────────────────
-
-function openGoogleFlights(flightId) {
-  const flight = flightsById[flightId];
-  const adults   = flight.adults || 1;
-  const children = flight.children || 0;
-  // Use first origin if array
-  const orig = Array.isArray(flight.origin) ? flight.origin[0] : flight.origin;
-  let url;
-  if (flight.returnDate) {
-    url = `https://www.google.com/travel/flights?q=flights%20from%20${orig}%20to%20${flight.destination}%20on%20${flight.departureDate}%20return%20${flight.returnDate}%20${adults}%20adult${adults > 1 ? 's' : ''}${children > 0 ? '%20' + children + '%20child' + (children > 1 ? 'ren' : '') : ''}`;
-  } else {
-    url = `https://www.google.com/travel/flights?q=flights%20from%20${orig}%20to%20${flight.destination}%20on%20${flight.departureDate}%20${adults}%20adult${adults > 1 ? 's' : ''}${children > 0 ? '%20' + children + '%20child' + (children > 1 ? 'ren' : '') : ''}`;
-  }
-  window.open(url, '_blank');
-}
-
-function openKayak(flightId) {
-  const flight = flightsById[flightId];
-  const orig = Array.isArray(flight.origin) ? flight.origin[0] : flight.origin;
-  const passengers = (flight.adults || 1) + (flight.children || 0);
-  const url = `https://www.kayak.com/flights/${orig}-${flight.destination}/${flight.departureDate}${flight.returnDate ? '/' + flight.returnDate : ''}/${passengers}adults`;
-  window.open(url, '_blank');
-}
-
-function openSkyscanner(flightId) {
-  const flight = flightsById[flightId];
-  const orig = Array.isArray(flight.origin) ? flight.origin[0] : flight.origin;
-  const returnDate = flight.returnDate || '';
-  const url = `https://www.skyscanner.com/transport/flights/${orig}/${flight.destination}/${flight.departureDate.replace(/-/g, '')}${returnDate ? '/' + returnDate.replace(/-/g, '') : ''}?adults=${flight.adults}&children=${flight.children || 0}&cabinclass=economy`;
-  window.open(url, '_blank');
 }
 
 // ── Trend score ───────────────────────────────────────────────────────────────

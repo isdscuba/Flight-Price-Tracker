@@ -1,10 +1,13 @@
 import os
+import io
 import hmac
+from urllib.parse import quote
 import re
 import logging
 from datetime import datetime
 from flask import Flask, request, jsonify
 from fast_flights import FlightData, Passengers, get_flights
+from fast_flights.filter import create_filter
 
 try:
     from fli.search import SearchFlights
@@ -46,15 +49,21 @@ def parse_price(price_str):
 
 
 def parse_flight_time(t_str):
-    """Parse '2:45 PM' style time to datetime.time. Returns None if unparseable."""
+    """Parse '2:45 PM' or '2:45 PM on Fri, Feb 12' to datetime.time. Returns None if unparseable."""
     if not t_str:
         return None
-    for fmt in ("%I:%M %p", "%I:%M%p", "%H:%M"):
-        try:
-            return datetime.strptime(t_str.strip(), fmt).time()
-        except ValueError:
-            continue
-    return None
+    m = re.match(r'\s*(\d{1,2}):(\d{2})\s*([AaPp][Mm])?', t_str)
+    if not m:
+        return None
+    h, mn, ap = int(m.group(1)), int(m.group(2)), m.group(3)
+    if ap:
+        ap = ap.upper()
+        if not 1 <= h <= 12:
+            return None
+        h = h % 12 + (12 if ap == 'PM' else 0)
+    if h > 23 or mn > 59:
+        return None
+    return datetime.strptime(f"{h:02d}:{mn:02d}", "%H:%M").time()
 
 
 def parse_hhmm(t_str):
@@ -122,6 +131,7 @@ def get_price():
 
     # Fetch flights from each origin and merge
     all_flights = []
+    origin_of = {}
     for orig in origins:
         try:
             flight_data_list = [FlightData(date=departure_date, from_airport=orig, to_airport=destination)]
@@ -136,6 +146,8 @@ def get_price():
             )
             if result and result.flights:
                 all_flights.extend(result.flights)
+                for rf in result.flights:
+                    origin_of[id(rf)] = orig
                 logging.info(f"{orig}->{destination}: {len(result.flights)} flights fetched")
         except Exception as e:
             logging.warning(f"No results for {orig}->{destination}: {e}")
@@ -224,7 +236,8 @@ def get_price():
             "departure": f.departure,
             "arrival":   f.arrival,
             "duration":  f.duration,
-            "stops":     stops_int(f)
+            "stops":     stops_int(f),
+            "origin":    origin_of.get(id(f))
         }
 
     # priceLevel from Google (use first result's context — may be None)
@@ -468,6 +481,75 @@ def get_fli_price():
         "flights":     flight_list,
         "topFlight":   top_flight,
     })
+
+
+@app.route("/link", methods=["POST"])
+def get_link():
+    """Google Flights deep link (?tfs=) that opens the exact search."""
+    if PRICE_SECRET and not hmac.compare_digest(request.headers.get("X-Price-Secret", ""), PRICE_SECRET):
+        return jsonify({"error": "Unauthorized"}), 401
+    b = request.get_json(silent=True) or {}
+    origin, dest, dep = b.get("origin"), b.get("destination"), b.get("departureDate")
+    if not (origin and dest and dep):
+        return jsonify({"error": "origin, destination, departureDate are required"}), 400
+    ret = b.get("returnDate")
+    max_stops = {"direct": 0, "1stop": 1}.get(b.get("stopsPreference", "any"))
+    legs = [FlightData(date=dep, from_airport=origin, to_airport=dest)]
+    if ret:
+        legs.append(FlightData(date=ret, from_airport=dest, to_airport=origin))
+    tfs = create_filter(
+        flight_data=legs,
+        trip="round-trip" if ret else "one-way",
+        passengers=Passengers(adults=int(b.get("adults", 1)) + int(b.get("children", 0))),
+        seat="economy",
+        max_stops=max_stops,
+    )
+    url = "https://www.google.com/travel/flights?tfs=" + quote(tfs.as_b64().decode()) + "&hl=en&curr=USD"
+    return jsonify({"url": url})
+
+
+@app.route("/chart", methods=["POST"])
+def get_chart():
+    """PNG price-history chart. Body: {title, subtitle, points:[{t: ISO, price}], bestEver}."""
+    if PRICE_SECRET and not hmac.compare_digest(request.headers.get("X-Price-Secret", ""), PRICE_SECRET):
+        return jsonify({"error": "Unauthorized"}), 401
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+
+    b = request.get_json(silent=True) or {}
+    pts = b.get("points") or []
+    if len(pts) < 2:
+        return jsonify({"error": "need at least 2 points"}), 400
+    xs = [datetime.fromisoformat(p["t"].replace("Z", "+00:00")) for p in pts]
+    ys = [float(p["price"]) for p in pts]
+
+    fig, ax = plt.subplots(figsize=(9, 4.5), dpi=110)
+    ax.plot(xs, ys, color="#2563eb", linewidth=2, marker="o", markersize=3.5, zorder=3)
+    ax.fill_between(xs, ys, min(ys) * 0.97, color="#2563eb", alpha=0.08, zorder=2)
+    best = b.get("bestEver")
+    if best:
+        ax.axhline(best, color="#16a34a", linestyle="--", linewidth=1.2, zorder=1)
+        ax.text(xs[0], best, f" best ever ${best:,.0f}", color="#16a34a", fontsize=9, va="bottom")
+    ax.scatter([xs[-1]], [ys[-1]], color="#dc2626", s=60, zorder=4)
+    ax.annotate(f"${ys[-1]:,.0f}", (xs[-1], ys[-1]), textcoords="offset points", xytext=(-6, 10),
+                ha="right", color="#dc2626", fontsize=11, fontweight="bold")
+    ax.set_title(b.get("title", ""), loc="left", fontsize=13, fontweight="bold")
+    if b.get("subtitle"):
+        ax.text(0, 1.01, b["subtitle"], transform=ax.transAxes, fontsize=9, color="#6b7280", va="bottom", ha="left")
+        ax.set_title(b.get("title", ""), loc="left", fontsize=13, fontweight="bold", pad=18)
+    ax.yaxis.set_major_formatter(lambda v, _: f"${v:,.0f}")
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
+    ax.grid(True, color="#e5e7eb", linewidth=0.8, zorder=0)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png")
+    plt.close(fig)
+    return buf.getvalue(), 200, {"Content-Type": "image/png"}
 
 
 @app.route("/health", methods=["GET"])

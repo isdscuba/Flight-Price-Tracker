@@ -100,24 +100,86 @@ function pickBest({ googlePrice, fliPrice }) {
   return candidates.reduce((a, b) => (a.price <= b.price ? a : b));
 }
 
-function bookingUrl(flight) {
+function fallbackUrl(flight, origin) {
   const adults = flight.adults || 1;
   const children = flight.children || 0;
   const pax = `%20${adults}%20adult${adults > 1 ? 's' : ''}` +
     (children > 0 ? `%20${children}%20child${children > 1 ? 'ren' : ''}` : '');
   const ret = flight.returnDate ? `%20return%20${flight.returnDate}` : '';
-  return `https://www.google.com/travel/flights?q=flights%20from%20${flight.origin}%20to%20${flight.destination}%20on%20${flight.departureDate}${ret}${pax}`;
+  return `https://www.google.com/travel/flights?q=flights%20from%20${origin}%20to%20${flight.destination}%20on%20${flight.departureDate}${ret}${pax}`;
 }
 
-async function sendTelegram(chatId, text) {
-  if (!TELEGRAM_TOKEN) throw new Error('TELEGRAM_TOKEN is not set');
-  const resp = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+/** Google Flights deep link (?tfs=) for the exact search; origin = the airport that won. */
+async function bookingUrl(flight, origin) {
+  const orig = origin || (Array.isArray(flight.origin) ? flight.origin[0] : flight.origin);
+  try {
+    const r = await postJson(`${FETCHER_URL}/link`, {
+      origin: orig, destination: flight.destination, departureDate: flight.departureDate,
+      returnDate: flight.returnDate || null, adults: flight.adults || 1, children: flight.children || 0,
+      stopsPreference: flight.stopsPreference || 'any'
+    }, FETCHER_SECRET ? { 'X-Price-Secret': FETCHER_SECRET } : {}, 15000);
+    return r.url;
+  } catch (e) {
+    console.warn(`link build failed: ${e.message}`);
+    return fallbackUrl(flight, orig);
+  }
+}
+
+/** PNG price-history chart for a flight, or null if there isn't enough history. */
+async function buildChart(flight) {
+  const rows = store.getHistory(flight.id);
+  if (rows.length < 2) return null;
+  const origin = Array.isArray(flight.origin) ? flight.origin.join('/') : flight.origin;
+  const dates = flight.returnDate ? `${flight.departureDate} → ${flight.returnDate}` : flight.departureDate;
+  try {
+    const resp = await fetch(`${FETCHER_URL}/chart`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(FETCHER_SECRET ? { 'X-Price-Secret': FETCHER_SECRET } : {}) },
+      body: JSON.stringify({
+        title: `${origin} → ${flight.destination}`,
+        subtitle: `${dates} · ${rows.length} checks`,
+        points: rows.map(r => ({ t: r.checkedAt, price: r.price })),
+        bestEver: flight.bestPrice ?? null
+      }),
+      signal: AbortSignal.timeout(30000)
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return Buffer.from(await resp.arrayBuffer());
+  } catch (e) {
+    console.warn(`chart build failed: ${e.message}`);
+    return null;
+  }
+}
+
+async function tgCall(method, body, isForm = false) {
+  const resp = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/${method}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text }),
-    signal: AbortSignal.timeout(15000)
+    headers: isForm ? undefined : { 'Content-Type': 'application/json' },
+    body: isForm ? body : JSON.stringify(body),
+    signal: AbortSignal.timeout(30000)
   });
-  if (!resp.ok) throw new Error(`Telegram HTTP ${resp.status}: ${await resp.text()}`);
+  if (!resp.ok) throw new Error(`Telegram ${method} HTTP ${resp.status}: ${await resp.text()}`);
+}
+
+/** Send text; if a chart PNG is given, send it as a photo with the text as caption (<=1024 chars). */
+async function sendTelegram(chatId, text, photo = null) {
+  if (!TELEGRAM_TOKEN) throw new Error('TELEGRAM_TOKEN is not set');
+  if (photo) {
+    try {
+      const form = new FormData();
+      form.append('chat_id', String(chatId));
+      form.append('photo', new Blob([photo], { type: 'image/png' }), 'history.png');
+      if (text.length <= 1024) {
+        form.append('caption', text);
+        return await tgCall('sendPhoto', form, true);
+      }
+      await tgCall('sendMessage', { chat_id: chatId, text, disable_web_page_preview: true });
+      return await tgCall('sendPhoto', form, true);
+    } catch (e) {
+      console.warn(`photo send failed, falling back to text: ${e.message}`);
+    }
+  }
+  await tgCall('sendMessage', { chat_id: chatId, text });
 }
 
 async function sendAlert(flight, prices, topFlight) {
@@ -153,12 +215,13 @@ async function sendAlert(flight, prices, topFlight) {
   const detail = topFlight
     ? `\n\n🛫 ${topFlight.airline} · ${stops} · ${topFlight.duration}\n  ${topFlight.departure} → ${topFlight.arrival} · ${topFlight.price}` : '';
   const origin = Array.isArray(flight.origin) ? flight.origin.join('/') : flight.origin;
+  const link = await bookingUrl(flight, topFlight?.origin);
 
   const msg = `🚨 ${origin} → ${flight.destination} (${flight.departureDate})\n\n` +
-    `${bestHeader}\nAll Prices:\n${lines.join('\n')}${detail}\n\n🔗 Google Flights: ${bookingUrl(flight)}`;
+    `${bestHeader}\nAll Prices:\n${lines.join('\n')}${detail}\n\n🔗 ${link}`;
 
   try {
-    await sendTelegram(flight.telegramChatId, msg);
+    await sendTelegram(flight.telegramChatId, msg, await buildChart(store.getFlight(flight.id) || flight));
     console.log(`Telegram notification sent to ${flight.telegramChatId}`);
   } catch (err) {
     console.error('Telegram send error:', err.message);
@@ -326,8 +389,9 @@ async function sendTestTelegram(flightId) {
     `  ✈️ Google Flights: ${money(flight.lastGooglePrice)}\n` +
     `  🔍 fli Scanner:   ${money(flight.lastFliPrice)}\n\n` +
     `Best Price Ever: ${flight.bestPrice ? money(flight.bestPrice) + ' via ' + (flight.bestPriceSource || '?') : 'N/A'}\n` +
-    `Alert Threshold: ${flight.alertPercentage}%`;
-  await sendTelegram(flight.telegramChatId, msg);
+    `Alert Threshold: ${flight.alertPercentage}%\n\n` +
+    `🔗 ${await bookingUrl(flight)}`;
+  await sendTelegram(flight.telegramChatId, msg, await buildChart(flight));
   return { success: true };
 }
 
