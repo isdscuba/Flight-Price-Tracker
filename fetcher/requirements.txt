@@ -1,0 +1,5 @@
+fast-flights==2.2
+primp==0.15.0
+flights>=0.8.4
+flask==3.0.3
+gunicorn==22.0.0

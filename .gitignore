@@ -1,0 +1,8 @@
+node_modules/
+.venv/
+__pycache__/
+data/
+.env
+backup/
+.claude/
+.DS_Store

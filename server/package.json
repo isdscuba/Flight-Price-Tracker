@@ -1,0 +1,16 @@
+{
+  "name": "flight-tracker-server",
+  "version": "2.0.0",
+  "description": "Local flight price tracker: Express API, SQLite, scheduled price checks, Telegram alerts",
+  "main": "index.js",
+  "scripts": {
+    "start": "node --env-file=../.env index.js",
+    "import": "node import-firestore.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.5.0",
+    "express": "^4.21.0",
+    "node-cron": "^3.0.3"
+  },
+  "private": true
+}
