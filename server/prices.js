@@ -258,7 +258,12 @@ async function getLivePrice(flightId) {
   const flight = store.getFlight(flightId);
   if (!flight) throw Object.assign(new Error('Flight not found'), { status: 404 });
 
-  const r = await fetchPrice(flight);
+  let r = await fetchPrice(flight);
+  for (let attempt = 1; attempt <= 2 && r.googlePrice === null; attempt++) {
+    await sleep(3000);
+    const retry = await fetchPrice(flight);
+    if (retry.googlePrice !== null) r = retry;
+  }
   const best = pickBest(r);
   if (!best) {
     return {

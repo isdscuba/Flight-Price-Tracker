@@ -68,10 +68,10 @@ def parse_hhmm(t_str):
 
 
 def duration_to_hrs(d_str):
-    """Convert '7h 35m' to float hours. Returns inf if unparseable."""
+    """Convert '7h 35m' or '7 hr 35 min' to float hours. Returns inf if unparseable."""
     if not d_str:
         return float('inf')
-    m = re.match(r'(?:(\d+)h\s*)?(?:(\d+)m)?', d_str.strip())
+    m = re.match(r'(?:(\d+)\s*h(?:ou)?r?s?\s*)?(?:(\d+)\s*m(?:in)?s?)?', d_str.strip(), re.IGNORECASE)
     if not m or (not m.group(1) and not m.group(2)):
         return float('inf')
     h = int(m.group(1) or 0)
