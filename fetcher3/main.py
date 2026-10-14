@@ -126,7 +126,8 @@ def search_legs(b):
     if back is None:
         return dict(EMPTY)
     total = out["googlePrice"] + back["googlePrice"]
-    top = dict(out["topFlight"], price=f"${total:.0f}", returnFlight=dict(back["topFlight"], to=back["to"]))
+    top = dict(out["topFlight"], price=f"${total:.0f}", outPrice=out["googlePrice"], backPrice=back["googlePrice"],
+               returnFlight=dict(back["topFlight"], to=back["to"]))
     return {**out, "googlePrice": total, "topFlight": top}
 
 

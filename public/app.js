@@ -314,6 +314,8 @@ function createFlightCard(flightId, flight) {
         <canvas id="canvas-${flightId}"></canvas>
       </div>
 
+      ${renderItinerary(flight)}
+
       <div class="collapsible-flights">
         <button class="collapse-toggle" onclick="toggleFlightList('${flightId}')">
           <span>Last fetched flights (${(flight.lastGoogleFlights || []).length})</span>
@@ -343,6 +345,28 @@ function createFlightCard(flightId, flight) {
 
   setTimeout(() => renderChart(flightId), 100);
   return card;
+}
+
+// ── Cheapest itinerary (outbound + return, priced separately) ─────────────────
+
+function legLine(label, l, price) {
+  if (!l) return '';
+  const stops = l.stops === 0 ? 'Nonstop' : `${l.stops} stop${l.stops > 1 ? 's' : ''}`;
+  return `<div class="itin-leg"><span class="itin-label">${label}</span>` +
+    `<span class="itin-main">${esc(l.airline)} · ${stops} · ${esc(l.duration)}</span>` +
+    `<span class="itin-time">${esc(l.departure)} → ${esc(l.arrival)}</span>` +
+    `${price != null ? `<span class="itin-price">$${Math.round(price).toLocaleString('en-US')}</span>` : ''}</div>`;
+}
+
+function renderItinerary(flight) {
+  const it = flight.lastItinerary;
+  if (!it) return '';
+  const rf = it.returnFlight;
+  return `<div class="itinerary">
+    <div class="itin-head">Cheapest itinerary <span class="price-source-badge">${esc(flight.lastItinerarySource || '')}</span></div>
+    ${legLine('Outbound', it, it.outPrice)}
+    ${legLine('Return' + (rf && rf.to ? ` → ${esc(rf.to)}` : ''), rf, it.backPrice)}
+  </div>`;
 }
 
 // ── Collapsible flight list ───────────────────────────────────────────────────

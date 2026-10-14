@@ -122,7 +122,8 @@ def _search_legs(body):
         return jsonify({"googlePrice": None, "priceLevel": None, "flightCount": 0, "flights": [], "topFlight": None})
 
     total = out["googlePrice"] + back["googlePrice"]
-    top = dict(out["topFlight"], price=f"${total:.0f}", returnFlight=dict(back["topFlight"], to=back["to"]))
+    top = dict(out["topFlight"], price=f"${total:.0f}", outPrice=out["googlePrice"], backPrice=back["googlePrice"],
+               returnFlight=dict(back["topFlight"], to=back["to"]))
     logging.info(f"legs {body['destination']}: out {out['googlePrice']} + back {back['googlePrice']} = {total}")
     return jsonify({**out, "googlePrice": total, "topFlight": top})
 

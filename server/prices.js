@@ -352,7 +352,8 @@ async function sendAlert(flight, r, sources, prefix = '') {
     const rf = t.returnFlight;
     const rStops = rf ? (rf.stops === 0 ? 'Nonstop' : `${rf.stops} stop${rf.stops > 1 ? 's' : ''}`) : '';
     return `🛫 ${x.label}: ${t.airline} · ${stops} · ${t.duration}\n  ${t.departure} → ${t.arrival} · ${t.price}` +
-      (rf ? `\n  ↩ Return: ${rf.airline} · ${rStops} · ${rf.duration}\n  ${rf.departure} → ${rf.arrival}` : '');
+      (rf ? `\n  ↩ Return: ${rf.airline} · ${rStops} · ${rf.duration}\n  ${rf.departure} → ${rf.arrival}` : '') +
+      (t.outPrice != null && t.backPrice != null ? `\n  💵 Outbound ${usd(t.outPrice)} + Return ${usd(t.backPrice)}` : '');
   });
 
   const origin = Array.isArray(flight.origin) ? flight.origin.join('/') : flight.origin;
@@ -394,6 +395,8 @@ function flightUpdateFields(r, best, extra, flight) {
     lastKiwiUrl:          r.kiwiUrl ?? null,
     lastFfPrice:          r.ffPrice ?? null,
     lastGoogleFlights:    r.googleFlightsList.length > 0 ? r.googleFlightsList : [],
+    lastItinerary:        topFor(best.source, r) ?? null,
+    lastItinerarySource:  best.source,
     lastChecked:          new Date().toISOString(),
     ...extra,
     ...sourceTracking(flight, r)

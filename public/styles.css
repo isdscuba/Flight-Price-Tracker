@@ -904,3 +904,12 @@ body {
   .form-row { grid-template-columns: 1fr; }
   .login-card { padding: 36px 24px; }
 }
+
+/* ─── Cheapest itinerary (outbound + return) ─── */
+.itinerary { margin: 12px 0; padding: 10px 12px; border: 1px solid var(--border, #e5e7eb); border-radius: 10px; background: rgba(59, 130, 246, 0.04); font-size: 0.8rem; }
+.itin-head { font-weight: 600; margin-bottom: 6px; }
+.itin-leg { display: grid; grid-template-columns: 90px 1fr auto; gap: 2px 10px; padding: 4px 0; align-items: baseline; }
+.itin-label { color: var(--text-muted, #6b7280); }
+.itin-main { font-weight: 500; }
+.itin-time { grid-column: 2; color: var(--text-muted, #6b7280); font-size: 0.75rem; }
+.itin-price { grid-row: 1; grid-column: 3; font-weight: 600; }
