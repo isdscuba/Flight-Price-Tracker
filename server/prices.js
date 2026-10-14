@@ -294,46 +294,65 @@ async function sendTelegram(chatId, text, photo = null) {
   await tgCall('sendMessage', { chat_id: chatId, text });
 }
 
-async function sendAlert(flight, prices, topFlight) {
-  const {
-    googlePrice, googlePriceLevel, fliPrice, kiwiPrice = null, ffPrice = null, kiwiUrl = null, primaryPrice, primaryPriceSource,
-    bestPrice = null, bestPriceSource = null, isNewBestPrice = false
-  } = prices;
-  const passengers = (flight.adults || 1) + (flight.children || 0);
+const usd = v => '$' + Math.round(v).toLocaleString('en-US');
 
-  const bestHeader = primaryPrice != null && primaryPriceSource
-    ? `Best Price (${passengers} pax): $${primaryPrice.toFixed(2)} ✅ ${primaryPriceSource}\n` : '';
-
-  const rows = [
-    { label: '✈️ Google Flights', price: googlePrice, level: googlePriceLevel, id: 'Google Flights' },
-    { label: '🛫 Kiwi.com',       price: kiwiPrice,   level: null,             id: SRC.kiwi },
-    // second Google parser: only shown when it disagrees with the main one
-    { label: '✈️ Google (alt)',   price: ffPrice !== googlePrice ? ffPrice : null, level: null, id: SRC.ff },
-    { label: '🔍 fli Scanner',    price: fliPrice,    level: null,             id: SRC.fli }
+/**
+ * Alert rule: a drop of at least the flight's threshold (default 5%) below the LOWEST price on
+ * record (the previous best across all sources), on either Google or Kiwi (or both).
+ * Both sources are always shown in the alert; only a real drop triggers it.
+ */
+function detectChanges(flight, r) {
+  const sources = [
+    { key: 'google', label: 'Google Flights', icon: '✈️', cur: r.googlePrice, top: r.topFlight },
+    { key: 'kiwi', label: 'Kiwi.com', icon: '🛫', cur: r.kiwiPrice, top: r.kiwiTopFlight }
   ];
-  const lines = rows.filter(s => s.price != null).map(s =>
-    `  ${s.label}: $${s.price.toFixed(2)}${s.level ? ` (${s.level})` : ''}${s.id === primaryPriceSource ? '  ✅' : ''}`);
-
-  if (bestPrice != null) {
-    const via = bestPriceSource ? ` via ${bestPriceSource}` : '';
-    if (isNewBestPrice) {
-      lines.push(`  🏆 Best ever: $${bestPrice.toFixed(2)} — NEW BEST!${via}`);
-    } else if (primaryPrice != null && primaryPrice > bestPrice) {
-      const above = ((primaryPrice - bestPrice) / bestPrice * 100).toFixed(1);
-      lines.push(`  📊 Best ever: $${bestPrice.toFixed(2)} (+${above}% above)${via}`);
-    } else {
-      lines.push(`  🏆 Best ever: $${bestPrice.toFixed(2)}${via}`);
-    }
+  const lowest = flight.lastPrice > 0 ? flight.lastPrice : null;
+  const threshold = flight.alertPercentage ?? 5;
+  for (const x of sources) {
+    x.lowest = lowest;
+    x.triggers = [];
+    if (x.cur == null || lowest == null) continue;
+    x.dropPct = ((lowest - x.cur) / lowest) * 100;
+    if (x.dropPct >= threshold) x.triggers.push(`dropped ${x.dropPct.toFixed(1)}% below the lowest (${usd(lowest)} → ${usd(x.cur)})`);
   }
+  return sources;
+}
 
-  const stops = topFlight ? (topFlight.stops === 0 ? 'Nonstop' : `${topFlight.stops} stop${topFlight.stops > 1 ? 's' : ''}`) : '';
-  const detail = topFlight
-    ? `\n\n🛫 ${topFlight.airline} · ${stops} · ${topFlight.duration}\n  ${topFlight.departure} → ${topFlight.arrival} · ${topFlight.price}` : '';
+async function sendAlert(flight, r, sources) {
+  const passengers = (flight.adults || 1) + (flight.children || 0);
+  const live = sources.filter(x => x.cur != null);
+  const lowest = live.length ? Math.min(...live.map(x => x.cur)) : null;
+
+  const triggerLines = sources.flatMap(x => x.triggers.map(t => `  • ${x.icon} ${x.label} ${t}`));
+
+  const rows = live.map(x => {
+    const bits = [];
+    if (x.lowest != null && x.dropPct != null && x.cur !== x.lowest) {
+      bits.push(`${x.dropPct >= 0 ? '−' : '+'}${Math.abs(x.dropPct).toFixed(1)}% vs lowest ${usd(x.lowest)}`);
+    }
+    return `  ${x.icon} ${x.label}: ${usd(x.cur)}${bits.length ? ` (${bits.join(', ')})` : ''}${x.cur === lowest && live.length > 1 ? '  ✅' : ''}`;
+  });
+  // second Google parser: only shown when it disagrees with the main one
+  if (r.ffPrice != null && r.ffPrice !== r.googlePrice) rows.push(`  ✈️ Google (alt): ${usd(r.ffPrice)}`);
+
+  // flight details for each source that triggered (or the cheapest one if only the overall best moved)
+  const detailSources = sources.filter(x => x.triggers.length && x.top);
+  const detailBlocks = (detailSources.length ? detailSources : live.filter(x => x.cur === lowest && x.top)).map(x => {
+    const t = x.top;
+    const stops = t.stops === 0 ? 'Nonstop' : `${t.stops} stop${t.stops > 1 ? 's' : ''}`;
+    return `🛫 ${x.label}: ${t.airline} · ${stops} · ${t.duration}\n  ${t.departure} → ${t.arrival} · ${t.price}`;
+  });
+
   const origin = Array.isArray(flight.origin) ? flight.origin.join('/') : flight.origin;
-  const link = await bookingUrl(flight, topFlight?.origin);
+  const topForLink = (detailSources[0] || live[0])?.top;
+  const link = await bookingUrl(flight, topForLink?.origin);
+  const kiwiTriggered = sources.find(x => x.key === 'kiwi' && x.triggers.length);
+  const kiwiLine = (kiwiTriggered || (live.find(x => x.cur === lowest)?.key === 'kiwi')) && r.kiwiUrl
+    ? `\n🎫 Kiwi booking: ${r.kiwiUrl}` : '';
 
   const msg = `🚨 ${origin} → ${flight.destination} (${flight.departureDate})\n\n` +
-    `${bestHeader}\nAll Prices:\n${lines.join('\n')}${detail}\n\n🔗 ${link}${primaryPriceSource === SRC.kiwi && kiwiUrl ? `\n🎫 Kiwi booking: ${kiwiUrl}` : ''}`;
+    `${triggerLines.join('\n')}\n\nPrices (${passengers} pax):\n${rows.join('\n')}` +
+    `${detailBlocks.length ? '\n\n' + detailBlocks.join('\n\n') : ''}\n\n🔗 ${link}${kiwiLine}`;
 
   try {
     await sendTelegram(flight.telegramChatId, msg, await buildChart(store.getFlight(flight.id) || flight));
@@ -343,7 +362,16 @@ async function sendAlert(flight, prices, topFlight) {
   }
 }
 
-function flightUpdateFields(r, best, extra) {
+/** Per-source best-ever prices (informational; alerts compare against the overall lowest). */
+function sourceTracking(flight, r) {
+  const minOf = (a, b) => (a == null ? b : b == null ? a : Math.min(a, b));
+  return {
+    bestGooglePrice: minOf(flight.bestGooglePrice ?? null, r.googlePrice),
+    bestKiwiPrice:   minOf(flight.bestKiwiPrice ?? null, r.kiwiPrice)
+  };
+}
+
+function flightUpdateFields(r, best, extra, flight) {
   return {
     lastPrice:            best.price,
     lastPriceSource:      best.source,
@@ -355,7 +383,8 @@ function flightUpdateFields(r, best, extra) {
     lastFfPrice:          r.ffPrice ?? null,
     lastGoogleFlights:    r.googleFlightsList.length > 0 ? r.googleFlightsList : [],
     lastChecked:          new Date().toISOString(),
-    ...extra
+    ...extra,
+    ...sourceTracking(flight, r)
   };
 }
 
@@ -389,41 +418,26 @@ async function checkAllFlights() {
         const best = pickBest(r);
         if (!best) { console.warn(`Skipping flight ${flight.id}: no price data from any source`); continue; }
         const { price: primaryPrice, source: primaryPriceSource } = best;
-        const alertTopFlight = topFor(primaryPriceSource, r);
 
         store.addHistory(flight.id, { price: primaryPrice, ...r });
         const trendScore = computePriceTrend(flight.id);
 
         const prevBest = flight.bestPrice ?? null;
-        const isNewBestPrice = prevBest !== null && primaryPrice < prevBest;
         const newBestPrice = prevBest !== null ? Math.min(prevBest, primaryPrice) : primaryPrice;
-        const newBestPriceSource = isNewBestPrice ? primaryPriceSource : (flight.bestPriceSource ?? primaryPriceSource);
-        const prevBestGoogle = flight.bestGooglePrice ?? null;
-        const newBestGooglePrice = r.googlePrice !== null
-          ? (prevBestGoogle !== null ? Math.min(prevBestGoogle, r.googlePrice) : r.googlePrice)
-          : prevBestGoogle;
+        const newBestPriceSource = (prevBest === null || primaryPrice < prevBest)
+          ? primaryPriceSource : (flight.bestPriceSource ?? primaryPriceSource);
 
-        let sendIt = false;
-        if (isNewBestPrice) sendIt = true;
-        if (flight.lastPrice != null && flight.lastPrice > 0) {
-          const drop = ((flight.lastPrice - primaryPrice) / flight.lastPrice) * 100;
-          if (drop >= flight.alertPercentage) sendIt = true;
-        }
-
-        if (sendIt) {
-          await sendAlert(flight, {
-            googlePrice: r.googlePrice, googlePriceLevel: r.googlePriceLevel, fliPrice: r.fliPrice,
-            kiwiPrice: r.kiwiPrice, ffPrice: r.ffPrice, kiwiUrl: r.kiwiUrl,
-            primaryPrice, primaryPriceSource,
-            bestPrice: newBestPrice, bestPriceSource: newBestPriceSource, isNewBestPrice
-          }, alertTopFlight);
+        // Alert when Google or Kiwi (or both) comes in >= threshold below the lowest price on record
+        const changes = detectChanges(flight, r);
+        if (changes.some(x => x.triggers.length)) {
+          await sendAlert(flight, r, changes);
         } else {
-          console.log(`No alert for ${flight.id} (google: ${r.googlePrice ?? 'n/a'}, fli: ${r.fliPrice ?? 'n/a'}, best: ${primaryPrice} via ${primaryPriceSource}, trend: ${trendScore.toFixed(2)})`);
+          console.log(`No alert for ${flight.id} (google: ${r.googlePrice ?? 'n/a'}, kiwi: ${r.kiwiPrice ?? 'n/a'}, trend: ${trendScore.toFixed(2)})`);
         }
 
         store.updateFlight(flight.id, flightUpdateFields(r, best, {
-          bestGooglePrice: newBestGooglePrice, bestPrice: newBestPrice, bestPriceSource: newBestPriceSource
-        }));
+          bestPrice: newBestPrice, bestPriceSource: newBestPriceSource
+        }, flight));
 
         await sleep(8000 + Math.floor(Math.random() * 7000)); // extra spacing between flights (on top of the global gate)
       } catch (err) {
@@ -461,15 +475,10 @@ async function getLivePrice(flightId) {
   const newBestPrice = prevBest !== null ? Math.min(prevBest, primaryPrice) : primaryPrice;
   const newBestPriceSource = (prevBest === null || primaryPrice <= prevBest)
     ? primaryPriceSource : (flight.bestPriceSource ?? primaryPriceSource);
-  const prevBestGoogle = flight.bestGooglePrice ?? null;
-  const newBestGooglePrice = r.googlePrice !== null
-    ? (prevBestGoogle !== null ? Math.min(prevBestGoogle, r.googlePrice) : r.googlePrice)
-    : prevBestGoogle;
-
   store.addHistory(flightId, { price: primaryPrice, ...r });
   store.updateFlight(flightId, flightUpdateFields(r, best, {
-    bestGooglePrice: newBestGooglePrice, bestPrice: newBestPrice, bestPriceSource: newBestPriceSource
-  }));
+    bestPrice: newBestPrice, bestPriceSource: newBestPriceSource
+  }, flight));
 
   return {
     success: true, price: primaryPrice, priceSource: primaryPriceSource,
@@ -491,8 +500,8 @@ async function fetchInitialPrice(flightId) {
     if (!best) { console.warn(`fetchInitialPrice: no price data for ${flightId}`); return; }
     store.addHistory(flightId, { price: best.price, ...r });
     store.updateFlight(flightId, flightUpdateFields(r, best, {
-      bestGooglePrice: r.googlePrice ?? null, bestPrice: best.price, bestPriceSource: best.source
-    }));
+      bestPrice: best.price, bestPriceSource: best.source
+    }, flight));
   } catch (err) {
     console.error(`fetchInitialPrice error for ${flightId}:`, err);
   }
@@ -517,4 +526,4 @@ async function sendTestTelegram(flightId) {
   return { success: true };
 }
 
-module.exports = { checkAllFlights, getLivePrice, fetchInitialPrice, sendTestTelegram, computePriceTrend };
+module.exports = { detectChanges, sendAlert, checkAllFlights, getLivePrice, fetchInitialPrice, sendTestTelegram, computePriceTrend };

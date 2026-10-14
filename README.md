@@ -5,14 +5,14 @@ Tracks flight prices on a schedule and sends Telegram alerts when prices drop or
 ## What it does
 
 - Add flights to track: origin(s), destination, dates, passengers, stop/time/duration filters, alert threshold
-- Checks prices at 6am, 12pm and 6pm ET from two sources in parallel and uses the lowest as the trigger
-- Telegram alert on a new all-time best or a drop of at least your threshold, with all source prices side by side
+- Checks prices at 6am, 12pm and 6pm ET from Google Flights and Kiwi.com
+- Telegram alert only when Google **or** Kiwi (or both) comes in at least your threshold (default 5%) below the lowest price on record; both prices are always shown in the alert, with a price-history chart and a deep link
 - Z-score trend indicator against the last 20 checks, and a price-history chart per flight
 - "Get Live Price" and "Test Telegram" buttons per flight
 
 ## Price sources
 
-Every check queries these in parallel/sequence (spaced out; see Pacing) and the **lowest price wins**. Telegram shows each source's price and marks the winner.
+Every check queries these (spaced out; see Pacing). The UI and alerts show each source's price; the lowest is the tracked price.
 
 | Source | Notes |
 |--------|-------|
