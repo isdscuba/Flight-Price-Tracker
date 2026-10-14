@@ -318,7 +318,7 @@ function detectChanges(flight, r) {
   return sources;
 }
 
-async function sendAlert(flight, r, sources) {
+async function sendAlert(flight, r, sources, prefix = '') {
   const passengers = (flight.adults || 1) + (flight.children || 0);
   const live = sources.filter(x => x.cur != null);
   const lowest = live.length ? Math.min(...live.map(x => x.cur)) : null;
@@ -350,7 +350,7 @@ async function sendAlert(flight, r, sources) {
   const kiwiLine = (kiwiTriggered || (live.find(x => x.cur === lowest)?.key === 'kiwi')) && r.kiwiUrl
     ? `\n🎫 Kiwi booking: ${r.kiwiUrl}` : '';
 
-  const msg = `🚨 ${origin} → ${flight.destination} (${flight.departureDate})\n\n` +
+  const msg = `${prefix}🚨 ${origin} → ${flight.destination} (${flight.departureDate})\n\n` +
     `${triggerLines.join('\n')}\n\nPrices (${passengers} pax):\n${rows.join('\n')}` +
     `${detailBlocks.length ? '\n\n' + detailBlocks.join('\n\n') : ''}\n\n🔗 ${link}${kiwiLine}`;
 
