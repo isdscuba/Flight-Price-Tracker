@@ -16,7 +16,7 @@ const ENABLE_FLI = process.env.ENABLE_FLI === '1';
 
 // Global pacing: every price fetch (scheduled, retry, or UI button) waits for a slot at
 // least MIN_GAP_MS (+ jitter) after the previous one, so Google never sees a burst.
-const MIN_GAP_MS = parseInt(process.env.MIN_FETCH_GAP_MS || '15000', 10);
+const MIN_GAP_MS = parseInt(process.env.MIN_FETCH_GAP_MS || '25000', 10);
 let nextSlot = 0;
 async function gate() {
   const now = Date.now();
@@ -407,12 +407,12 @@ async function checkAllFlights() {
         }
 
         let r = await fetchPrice(flight);
-        for (let attempt = 1; attempt <= 2 && pickBest(r) === null; attempt++) {
+        for (let attempt = 1; attempt <= 2 && r.googlePrice === null; attempt++) {
           const backoff = attempt === 1 ? 20000 : 60000;
-          console.log(`[${flight.origin}-${flight.destination}] no source returned a price, retry ${attempt}/2 in ${backoff / 1000}s...`);
+          console.log(`[${flight.origin}-${flight.destination}] Google n/a, retry ${attempt}/2 in ${backoff / 1000}s...`);
           await sleep(backoff);
           const retry = await fetchPrice(flight);
-          if (pickBest(retry) !== null) r = retry;
+          if (retry.googlePrice !== null) r = retry;
         }
 
         const best = pickBest(r);
@@ -456,10 +456,10 @@ async function getLivePrice(flightId) {
   if (!flight) throw Object.assign(new Error('Flight not found'), { status: 404 });
 
   let r = await fetchPrice(flight);
-  for (let attempt = 1; attempt <= 2 && pickBest(r) === null; attempt++) {
+  for (let attempt = 1; attempt <= 2 && r.googlePrice === null; attempt++) {
     await sleep(attempt === 1 ? 10000 : 30000);
     const retry = await fetchPrice(flight);
-    if (pickBest(retry) !== null) r = retry;
+    if (retry.googlePrice !== null) r = retry;
   }
   const best = pickBest(r);
   if (!best) {

@@ -69,7 +69,7 @@ def price():
     count = 0
     for i, orig in enumerate(origins):
         if i:
-            time.sleep(2)
+            time.sleep(4)
         try:
             legs = [FlightQuery(date=dep, from_airport=orig, to_airport=dest)]
             if ret:

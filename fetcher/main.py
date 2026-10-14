@@ -135,7 +135,7 @@ def get_price():
     origin_of = {}
     for i, orig in enumerate(origins):
         if i:
-            time.sleep(2)  # pace per-airport requests to Google
+            time.sleep(4)  # pace per-airport requests to Google
         try:
             flight_data_list = [FlightData(date=departure_date, from_airport=orig, to_airport=destination)]
             if return_date:
