@@ -143,7 +143,7 @@ async function fetchPrice(flight) {
   // Second Google parser (fast-flights 3.x). Runs after the first call so Google never sees a burst.
   let ffPrice = null, ffTopFlight = null;
   try {
-    const ff = await postJson(`${FF3_URL}/price`, payload, {}, 90000);
+    const ff = await postJson(`${FF3_URL}/price`, payload, headers, 90000);
     if (typeof ff.googlePrice === 'number' && ff.googlePrice > 0) {
       ffPrice = parseFloat(ff.googlePrice.toFixed(2));
       ffTopFlight = ff.topFlight || null;

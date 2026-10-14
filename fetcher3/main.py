@@ -2,6 +2,7 @@
 the 2.2-based service in ../fetcher). Same request body as /price; returns the cheapest
 matching itinerary after the same stop/time/duration/airline filters."""
 import os
+import hmac
 import time
 import logging
 from datetime import datetime, timedelta
@@ -11,6 +12,7 @@ from fast_flights import FlightQuery, Passengers, create_query, get_flights
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
+PRICE_SECRET = os.environ.get("PRICE_SECRET", "")
 EXCLUDED_AIRLINES = {"frontier", "spirit"}
 EMPTY = {"googlePrice": None, "flightCount": 0, "topFlight": None}
 
@@ -48,6 +50,8 @@ def fmt_dur(mins):
 
 @app.route("/price", methods=["POST"])
 def price():
+    if PRICE_SECRET and not hmac.compare_digest(request.headers.get("X-Price-Secret", ""), PRICE_SECRET):
+        return jsonify({"error": "Unauthorized"}), 401
     b = request.get_json(silent=True) or {}
     origin_raw, dest, dep = b.get("origin"), b.get("destination"), b.get("departureDate")
     if not (origin_raw and dest and dep):
