@@ -161,7 +161,7 @@ async function fetchPrice(flight) {
     console.warn(`${label} fast-flights 3 error: ${e.message}`);
   }
 
-  let googlePrice = null, googlePriceLevel = null, googleFlightsList = [], topFlight = null;
+  let googlePrice = null, googlePriceLevel = null, googleFlightsList = [], topFlight = null, googleRtPrice = null;
   if (gData) {
     if (typeof gData.googlePrice === 'number' && gData.googlePrice > 0) {
       googlePrice = parseFloat(gData.googlePrice.toFixed(2));
@@ -169,6 +169,7 @@ async function fetchPrice(flight) {
     }
     googleFlightsList = Array.isArray(gData.flights) ? gData.flights : [];
     topFlight = gData.topFlight || null;
+    if (typeof gData.rtPrice === 'number' && gData.rtPrice > 0) googleRtPrice = parseFloat(gData.rtPrice.toFixed(2));
   }
 
   let fliPrice = null, fliTopFlight = null, fliFlightsList = [];
@@ -184,7 +185,7 @@ async function fetchPrice(flight) {
   console.log(`${label} google: ${googlePrice ?? 'n/a'}, kiwi: ${kiwiPrice ?? 'n/a'}, ff3: ${ffPrice ?? 'n/a'}${ffPrice !== null && ffPrice === googlePrice ? ' (same)' : ''}, fli: ${fliPrice ?? 'n/a'}`);
   return {
     googlePrice, googlePriceLevel, googleFlightsList, topFlight, fliPrice, fliTopFlight, fliFlightsList,
-    kiwiPrice, kiwiTopFlight: kiwi?.topFlight ?? null, kiwiUrl: kiwi?.url ?? null, ffPrice, ffTopFlight
+    googleRtPrice, kiwiPrice, kiwiTopFlight: kiwi?.topFlight ?? null, kiwiUrl: kiwi?.url ?? null, ffPrice, ffTopFlight
   };
 }
 
@@ -343,6 +344,7 @@ async function sendAlert(flight, r, sources, prefix = '') {
   });
   // second Google parser: only shown when it disagrees with the main one
   if (r.ffPrice != null && r.ffPrice !== r.googlePrice) rows.push(`  ✈️ Google (alt): ${usd(r.ffPrice)}`);
+  if (r.googleRtPrice != null && r.googleRtPrice !== r.googlePrice) rows.push(`  🔁 Google round trip, all-in: ${usd(r.googleRtPrice)} (return length unverified)`);
 
   // flight details for each source that triggered (or the cheapest one if only the overall best moved)
   const detailSources = sources.filter(x => x.triggers.length && x.top);
@@ -391,6 +393,7 @@ function flightUpdateFields(r, best, extra, flight) {
     lastGooglePrice:      r.googlePrice ?? null,
     lastGooglePriceLevel: r.googlePriceLevel ?? null,
     lastFliPrice:         r.fliPrice ?? null,
+    lastGoogleRtPrice:    r.googleRtPrice ?? null,
     lastKiwiPrice:        r.kiwiPrice ?? null,
     lastKiwiUrl:          r.kiwiUrl ?? null,
     lastFfPrice:          r.ffPrice ?? null,
@@ -498,7 +501,7 @@ async function getLivePrice(flightId) {
   return {
     success: true, price: primaryPrice, priceSource: primaryPriceSource,
     googlePrice: r.googlePrice ?? null, googlePriceLevel: r.googlePriceLevel ?? null, fliPrice: r.fliPrice ?? null,
-    kiwiPrice: r.kiwiPrice ?? null, ffPrice: r.ffPrice ?? null,
+    kiwiPrice: r.kiwiPrice ?? null, ffPrice: r.ffPrice ?? null, googleRtPrice: r.googleRtPrice ?? null,
     currency: 'USD',
     flight: { origin: flight.origin, destination: flight.destination, departureDate: flight.departureDate, returnDate: flight.returnDate }
   };

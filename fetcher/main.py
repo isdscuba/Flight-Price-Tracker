@@ -124,8 +124,14 @@ def _search_legs(body):
     total = out["googlePrice"] + back["googlePrice"]
     top = dict(out["topFlight"], price=f"${total:.0f}", outPrice=out["googlePrice"], backPrice=back["googlePrice"],
                returnFlight=dict(back["topFlight"], to=back["to"]))
-    logging.info(f"legs {body['destination']}: out {out['googlePrice']} + back {back['googlePrice']} = {total}")
-    return jsonify({**out, "googlePrice": total, "topFlight": top})
+
+    # Google's own all-in round-trip fare (both legs capped at the stop limit). Often cheaper than two
+    # one-ways, but the return flight behind it can't be seen, so its length is NOT verified.
+    time.sleep(4)
+    rt = _search_price(body).get_json()
+    logging.info(f"legs {body['destination']}: out {out['googlePrice']} + back {back['googlePrice']} = {total}; all-in RT {rt.get('googlePrice')}")
+    return jsonify({**out, "googlePrice": total, "topFlight": top,
+                    "rtPrice": rt.get("googlePrice"), "rtTopFlight": rt.get("topFlight")})
 
 
 @app.route("/price", methods=["POST"])
@@ -181,9 +187,10 @@ def _search_price(body):
         if i:
             time.sleep(4)  # pace per-airport requests to Google
         try:
-            flight_data_list = [FlightData(date=departure_date, from_airport=orig, to_airport=destination)]
+            leg_stops = {"direct": 0, "1stop": 1}.get(stops_preference)  # applied to every leg, incl. the return
+            flight_data_list = [FlightData(date=departure_date, from_airport=orig, to_airport=destination, max_stops=leg_stops)]
             if return_date:
-                flight_data_list.append(FlightData(date=return_date, from_airport=destination, to_airport=orig))
+                flight_data_list.append(FlightData(date=return_date, from_airport=destination, to_airport=orig, max_stops=leg_stops))
 
             result = get_flights(
                 flight_data=flight_data_list,

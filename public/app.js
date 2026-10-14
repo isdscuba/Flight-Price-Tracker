@@ -269,6 +269,11 @@ function createFlightCard(flightId, flight) {
               : '<span style="color:var(--text-faint);font-size:0.8rem;font-weight:400;">—</span>'}
           </span>
         </div>
+        ${flight.lastGoogleRtPrice != null && flight.lastGoogleRtPrice !== flight.lastGooglePrice ? `
+        <div class="detail-item">
+          <span class="detail-label" title="Google's own round-trip fare. The return flight can't be seen, so its length isn't verified.">Google all-in RT*</span>
+          <span class="detail-value price-google">$${flight.lastGoogleRtPrice.toFixed(0)}</span>
+        </div>` : ''}
         <div class="detail-item">
           <span class="detail-label">Kiwi.com</span>
           <span class="detail-value price-fli">
@@ -417,7 +422,7 @@ async function testLivePrice(flightId) {
       return;
     }
 
-    const { googlePrice, googlePriceLevel, kiwiPrice, ffPrice, currency, flight } = data;
+    const { googlePrice, googlePriceLevel, kiwiPrice, ffPrice, googleRtPrice, currency, flight } = data;
     const originDisplay = Array.isArray(flight.origin) ? flight.origin.join('/') : flight.origin;
     const cur = currency || 'USD';
     const lines = [
@@ -426,6 +431,7 @@ async function testLivePrice(flightId) {
         : 'Google Flights: n/a',
       kiwiPrice != null ? `🛫 Kiwi.com:          ${kiwiPrice.toFixed(2)} ${cur}` : 'Kiwi.com: n/a'
     ];
+    if (googleRtPrice != null && googleRtPrice !== googlePrice) lines.push(`🔁 Google all-in RT*:  ${googleRtPrice.toFixed(2)} ${cur}  (*return length unverified)`);
     if (ffPrice != null && ffPrice !== googlePrice) lines.push(`✈ Google (alt):     ${ffPrice.toFixed(2)} ${cur}`);
 
     alert(`Live Prices Fetched!\n\n${originDisplay} → ${flight.destination}\n\n${lines.join('\n')}`);
