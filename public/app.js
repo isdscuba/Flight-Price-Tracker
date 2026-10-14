@@ -270,13 +270,18 @@ function createFlightCard(flightId, flight) {
           </span>
         </div>
         <div class="detail-item">
-          <span class="detail-label">fli Scanner</span>
+          <span class="detail-label">Kiwi.com</span>
           <span class="detail-value price-fli">
-            ${flight.lastFliPrice != null
-              ? `$${flight.lastFliPrice.toFixed(0)}`
+            ${flight.lastKiwiPrice != null
+              ? `$${flight.lastKiwiPrice.toFixed(0)}`
               : '<span style="color:var(--text-faint);font-size:0.8rem;font-weight:400;">—</span>'}
           </span>
         </div>
+        ${flight.lastFfPrice != null && flight.lastFfPrice !== flight.lastGooglePrice ? `
+        <div class="detail-item">
+          <span class="detail-label">Google (alt)</span>
+          <span class="detail-value price-google">$${flight.lastFfPrice.toFixed(0)}</span>
+        </div>` : ''}
         <div class="detail-item">
           <span class="detail-label">Best Ever</span>
           <span class="detail-value price-best-google">
@@ -388,17 +393,18 @@ async function testLivePrice(flightId) {
       return;
     }
 
-    const { googlePrice, googlePriceLevel, fliPrice, currency, flight } = data;
+    const { googlePrice, googlePriceLevel, kiwiPrice, ffPrice, currency, flight } = data;
     const originDisplay = Array.isArray(flight.origin) ? flight.origin.join('/') : flight.origin;
+    const cur = currency || 'USD';
+    const lines = [
+      googlePrice != null
+        ? `✈ Google Flights:  ${googlePrice.toFixed(2)} ${cur}${googlePriceLevel ? ' (' + googlePriceLevel + ')' : ''}`
+        : 'Google Flights: n/a',
+      kiwiPrice != null ? `🛫 Kiwi.com:          ${kiwiPrice.toFixed(2)} ${cur}` : 'Kiwi.com: n/a'
+    ];
+    if (ffPrice != null && ffPrice !== googlePrice) lines.push(`✈ Google (alt):     ${ffPrice.toFixed(2)} ${cur}`);
 
-    const googleLine = googlePrice != null
-      ? `✈ Google Flights:  ${googlePrice.toFixed(2)} ${currency || 'USD'}${googlePriceLevel ? ' (' + googlePriceLevel + ')' : ''}`
-      : 'Google Flights: n/a';
-    const cheapLine = fliPrice != null
-      ? `🔍 fli Scanner:     ${fliPrice.toFixed(2)} ${currency || 'USD'}`
-      : 'fli Scanner: n/a';
-
-    alert(`Live Prices Fetched!\n\n${originDisplay} → ${flight.destination}\n\n${googleLine}\n${cheapLine}`);
+    alert(`Live Prices Fetched!\n\n${originDisplay} → ${flight.destination}\n\n${lines.join('\n')}`);
     await refreshFlights();
   } catch (err) {
     alert(`Error fetching price: ${err.message}`);
@@ -469,7 +475,9 @@ async function renderChart(flightId) {
 
     const googleData = rows.map(d => d.googlePrice ?? null);
 
+    const kiwiData = rows.map(d => d.kiwiPrice ?? null);
     const hasGoogleData = googleData.some(v => v !== null);
+    const hasKiwiData = kiwiData.some(v => v !== null);
 
     if (chartInstances[flightId]) {
       chartInstances[flightId].destroy();
@@ -495,6 +503,24 @@ async function renderChart(flightId) {
       });
     }
 
+    if (hasKiwiData) {
+      datasets.push({
+        label: 'Kiwi.com',
+        data: kiwiData,
+        borderColor: '#d97706',
+        backgroundColor: 'rgba(217, 119, 6, 0.05)',
+        borderWidth: 2,
+        fill: false,
+        tension: 0.4,
+        pointRadius: 3,
+        pointHoverRadius: 5,
+        pointBackgroundColor: '#d97706',
+        pointBorderColor: '#ffffff',
+        spanGaps: true,
+        order: 2
+      });
+    }
+
     chartInstances[flightId] = new Chart(canvas, {
       type: 'line',
       data: { labels, datasets },
@@ -503,7 +529,7 @@ async function renderChart(flightId) {
         maintainAspectRatio: true,
         plugins: {
           legend: {
-            display: false,
+            display: hasKiwiData,
             labels: { color: '#5f6368', font: { size: 11 } }
           },
           tooltip: {

@@ -30,6 +30,12 @@ db.exec(`
   );
 `);
 
+// additive migrations
+const histCols = db.prepare("PRAGMA table_info(history)").all().map(c => c.name);
+for (const col of ['kiwi_price', 'ff_price']) {
+  if (!histCols.includes(col)) db.exec(`ALTER TABLE history ADD COLUMN ${col} REAL`);
+}
+
 const newId = () => crypto.randomBytes(10).toString('hex');
 
 function listFlights() {
@@ -61,15 +67,15 @@ function deleteFlight(id) {
   return db.prepare('DELETE FROM flights WHERE id = ?').run(id).changes > 0;
 }
 
-function addHistory(flightId, { price, googlePrice, googlePriceLevel, fliPrice }, checkedAt = new Date().toISOString()) {
-  db.prepare(`INSERT INTO history (flight_id, price, google_price, google_level, fli_price, checked_at)
-              VALUES (?, ?, ?, ?, ?, ?)`)
-    .run(flightId, price, googlePrice ?? null, googlePriceLevel ?? null, fliPrice ?? null, checkedAt);
+function addHistory(flightId, { price, googlePrice, googlePriceLevel, fliPrice, kiwiPrice, ffPrice }, checkedAt = new Date().toISOString()) {
+  db.prepare(`INSERT INTO history (flight_id, price, google_price, google_level, fli_price, kiwi_price, ff_price, checked_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(flightId, price, googlePrice ?? null, googlePriceLevel ?? null, fliPrice ?? null, kiwiPrice ?? null, ffPrice ?? null, checkedAt);
 }
 
 function getHistory(flightId) {
   return db.prepare(`SELECT price, google_price AS googlePrice, google_level AS googlePriceLevel,
-                            fli_price AS fliPrice, checked_at AS checkedAt
+                            fli_price AS fliPrice, kiwi_price AS kiwiPrice, ff_price AS ffPrice, checked_at AS checkedAt
                      FROM history WHERE flight_id = ? ORDER BY checked_at ASC`).all(flightId);
 }
 

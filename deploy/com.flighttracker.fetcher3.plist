@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.flighttracker.fetcher3</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/staciedee/Projects/flighttracker/fetcher3/.venv/bin/gunicorn</string>
+    <string>--bind</string>
+    <string>127.0.0.1:4332</string>
+    <string>--workers</string>
+    <string>2</string>
+    <string>--threads</string>
+    <string>2</string>
+    <string>--timeout</string>
+    <string>60</string>
+    <string>main:app</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/staciedee/Projects/flighttracker/fetcher3</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/staciedee/Library/Logs/flighttracker/fetcher3.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/staciedee/Library/Logs/flighttracker/fetcher3.error.log</string>
+</dict>
+</plist>
