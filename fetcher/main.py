@@ -89,6 +89,44 @@ def duration_to_hrs(d_str):
     return h + mn / 60
 
 
+def _origin_list(origin_raw):
+    if isinstance(origin_raw, list):
+        out = [o.strip().upper() for o in origin_raw if o.strip()]
+    else:
+        out = [s.strip().upper() for s in str(origin_raw).split(',') if s.strip()]
+    return out[:5]
+
+
+def _search_legs(body):
+    """Round trips: price = cheapest compliant outbound + cheapest compliant return.
+
+    Google's round-trip listing only shows outbound flights, priced with whichever return is
+    cheapest (often a long-layover one we can't see or filter). So each leg is searched as a
+    one-way with the same stops/duration filters, which verifies the return leg. The total is
+    two one-way fares, so it can differ from Google's own round-trip price."""
+    origins = _origin_list(body.get("origin"))
+    out = _search_price({**body, "returnDate": None}).get_json()
+    if not out.get("googlePrice"):
+        return jsonify(out)
+
+    back = None
+    for o in origins:
+        time.sleep(4)
+        leg = {k: body.get(k) for k in ("adults", "children", "stopsPreference", "maxDurationHours")}
+        leg.update(origin=body["destination"], destination=o, departureDate=body["returnDate"], returnDate=None)
+        r = _search_price(leg).get_json()
+        if r.get("googlePrice") and (back is None or r["googlePrice"] < back["googlePrice"]):
+            back = {**r, "to": o}
+    if back is None:
+        logging.warning(f"No return flight meeting filters for {body['destination']} on {body['returnDate']}")
+        return jsonify({"googlePrice": None, "priceLevel": None, "flightCount": 0, "flights": [], "topFlight": None})
+
+    total = out["googlePrice"] + back["googlePrice"]
+    top = dict(out["topFlight"], price=f"${total:.0f}", returnFlight=dict(back["topFlight"], to=back["to"]))
+    logging.info(f"legs {body['destination']}: out {out['googlePrice']} + back {back['googlePrice']} = {total}")
+    return jsonify({**out, "googlePrice": total, "topFlight": top})
+
+
 @app.route("/price", methods=["POST"])
 def get_price():
     # Validate shared secret if configured
@@ -98,7 +136,12 @@ def get_price():
     body = request.get_json(silent=True)
     if not body:
         return jsonify({"error": "Missing JSON body"}), 400
+    if body.get("returnDate"):
+        return _search_legs(body)
+    return _search_price(body)
 
+
+def _search_price(body):
     # Required fields
     origin_raw   = body.get("origin")       # str "JFK" OR list ["JFK","LGA","ISP"]
     destination  = body.get("destination")

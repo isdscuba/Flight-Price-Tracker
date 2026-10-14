@@ -48,14 +48,10 @@ def fmt_dur(mins):
     return f"{h} hr {m} min" if m else f"{h} hr"
 
 
-@app.route("/price", methods=["POST"])
-def price():
-    if PRICE_SECRET and not hmac.compare_digest(request.headers.get("X-Price-Secret", ""), PRICE_SECRET):
-        return jsonify({"error": "Unauthorized"}), 401
-    b = request.get_json(silent=True) or {}
+def search(b):
     origin_raw, dest, dep = b.get("origin"), b.get("destination"), b.get("departureDate")
     if not (origin_raw and dest and dep):
-        return jsonify({"error": "origin, destination, departureDate are required"}), 400
+        return {"error": "origin, destination, departureDate are required"}
     ret = b.get("returnDate")
     origins = origin_raw if isinstance(origin_raw, list) else str(origin_raw).split(",")
     origins = [o.strip().upper() for o in origins if o.strip()][:5]
@@ -100,7 +96,7 @@ def price():
 
     if best is None:
         logging.warning(f"v3: nothing matched filters for {origins}->{dest} {dep}")
-        return jsonify(EMPTY)
+        return dict(EMPTY)
     r, mins = best
     segs = r.flights
     top = {
@@ -109,7 +105,40 @@ def price():
         "duration": fmt_dur(mins), "stops": len(segs) - 1, "origin": segs[0].from_airport.code,
     }
     logging.info(f"v3 {origins}->{dest} {dep}: min={r.price}, {count} matching")
-    return jsonify({"googlePrice": float(r.price), "flightCount": count, "topFlight": top})
+    return {"googlePrice": float(r.price), "flightCount": count, "topFlight": top}
+
+
+def search_legs(b):
+    """Round trips as two verified one-way legs (see fetcher/main.py _search_legs)."""
+    origins = b["origin"] if isinstance(b["origin"], list) else str(b["origin"]).split(",")
+    origins = [o.strip().upper() for o in origins if o.strip()][:5]
+    out = search({**b, "returnDate": None})
+    if not out.get("googlePrice"):
+        return out
+    back = None
+    for o in origins:
+        time.sleep(4)
+        leg = {k: b.get(k) for k in ("adults", "children", "stopsPreference", "maxDurationHours")}
+        leg.update(origin=b["destination"], destination=o, departureDate=b["returnDate"], returnDate=None)
+        r = search(leg)
+        if r.get("googlePrice") and (back is None or r["googlePrice"] < back["googlePrice"]):
+            back = {**r, "to": o}
+    if back is None:
+        return dict(EMPTY)
+    total = out["googlePrice"] + back["googlePrice"]
+    top = dict(out["topFlight"], price=f"${total:.0f}", returnFlight=dict(back["topFlight"], to=back["to"]))
+    return {**out, "googlePrice": total, "topFlight": top}
+
+
+@app.route("/price", methods=["POST"])
+def price():
+    if PRICE_SECRET and not hmac.compare_digest(request.headers.get("X-Price-Secret", ""), PRICE_SECRET):
+        return jsonify({"error": "Unauthorized"}), 401
+    b = request.get_json(silent=True) or {}
+    res = search_legs(b) if b.get("returnDate") and b.get("origin") and b.get("destination") else search(b)
+    if "error" in res:
+        return jsonify(res), 400
+    return jsonify(res)
 
 
 @app.route("/health")

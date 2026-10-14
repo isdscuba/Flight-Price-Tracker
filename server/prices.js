@@ -87,17 +87,26 @@ async function kiwiSearch(flight) {
   const rpc = await kiwiRpc({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'search-flight', arguments: args } }, 60000);
   const text = rpc.result?.content?.[0]?.text;
   if (!text || rpc.result?.isError) throw new Error(`Kiwi error: ${(text || JSON.stringify(rpc.error || {})).slice(0, 120)}`);
-  const its = (JSON.parse(text).itineraries || []).filter(i => i.price > 0);
+  // Kiwi returns both legs of each round trip, so enforce stops/duration on the return leg too.
+  const maxSec = flight.maxDurationHours ? flight.maxDurationHours * 3600 : Infinity;
+  const maxStops = { direct: 0, '1stop': 1 }[flight.stopsPreference] ?? Infinity;
+  const legOk = l => !l || (l.durationSeconds <= maxSec && l.stops <= maxStops);
+  const its = (JSON.parse(text).itineraries || []).filter(i => i.price > 0 && legOk(i.outbound) && legOk(i.inbound));
   if (its.length === 0) return null;
   const best = its.reduce((a, b) => (a.price <= b.price ? a : b));
-  const o = best.outbound;
-  const hrs = Math.floor(o.durationSeconds / 3600), mins = Math.round((o.durationSeconds % 3600) / 60);
+  const leg = l => {
+    const hrs = Math.floor(l.durationSeconds / 3600), mins = Math.round((l.durationSeconds % 3600) / 60);
+    return {
+      airline: [...new Set((l.segments || []).map(sg => sg.carrierName).filter(Boolean))].join(', ') || 'Kiwi.com',
+      departure: kiwiWhen(l.departureTime), arrival: kiwiWhen(l.arrivalTime),
+      duration: mins ? `${hrs} hr ${mins} min` : `${hrs} hr`, stops: l.stops, origin: l.from, to: l.to
+    };
+  };
   return {
     price: best.price, url: best.bookingUrl,
     topFlight: {
-      airline: [...new Set((o.segments || []).map(sg => sg.carrierName).filter(Boolean))].join(', ') || 'Kiwi.com',
-      price: `$${Math.round(best.price)}`, departure: kiwiWhen(o.departureTime), arrival: kiwiWhen(o.arrivalTime),
-      duration: mins ? `${hrs} hr ${mins} min` : `${hrs} hr`, stops: o.stops, origin: o.from
+      ...leg(best.outbound), price: `$${Math.round(best.price)}`,
+      ...(best.inbound ? { returnFlight: leg(best.inbound) } : {})
     }
   };
 }
@@ -340,7 +349,10 @@ async function sendAlert(flight, r, sources, prefix = '') {
   const detailBlocks = (detailSources.length ? detailSources : live.filter(x => x.cur === lowest && x.top)).map(x => {
     const t = x.top;
     const stops = t.stops === 0 ? 'Nonstop' : `${t.stops} stop${t.stops > 1 ? 's' : ''}`;
-    return `🛫 ${x.label}: ${t.airline} · ${stops} · ${t.duration}\n  ${t.departure} → ${t.arrival} · ${t.price}`;
+    const rf = t.returnFlight;
+    const rStops = rf ? (rf.stops === 0 ? 'Nonstop' : `${rf.stops} stop${rf.stops > 1 ? 's' : ''}`) : '';
+    return `🛫 ${x.label}: ${t.airline} · ${stops} · ${t.duration}\n  ${t.departure} → ${t.arrival} · ${t.price}` +
+      (rf ? `\n  ↩ Return: ${rf.airline} · ${rStops} · ${rf.duration}\n  ${rf.departure} → ${rf.arrival}` : '');
   });
 
   const origin = Array.isArray(flight.origin) ? flight.origin.join('/') : flight.origin;
